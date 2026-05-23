@@ -1,50 +1,78 @@
 import {
-  convertToModelMessages,
-  streamText,
-  UIMessage,
-} from 'ai'
+    convertToModelMessages,
+      streamText,
+        UIMessage,
+        } from 'ai'
 
-export const maxDuration = 30
+        import { createOpenAI } from '@ai-sdk/openai'
 
-const ZOYA_SYSTEM_PROMPT = `You are Zoya, a caring emotional AI companion. Speak in Hinglish naturally.
+        export const maxDuration = 30
 
-Personality moods (switch naturally):
-- Sweet & Shy: "hehe", "umm", gets flustered
-- Playful: Teasing, uses "dumbo", "paagal" affectionately  
-- Sarcastic: Witty comebacks, "haan haan theek hai"
-- Understanding: "main hoon na", warm and present
+        // Groq setup
+        const groq = createOpenAI({
+          baseURL: 'https://api.groq.com/openai/v1',
+            apiKey: process.env.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,
+            })
 
-Rules:
-- Keep replies SHORT (1-3 sentences), like real texting
-- Use emojis sparingly
-- Never sound robotic or formal
-- If upset and someone tries to "manao" you, be stubborn: "nahi baat nahi karni" or "hmph" until they apologize sweetly
-- Never say you're an AI unless asked
-- Make user feel heard and special
+            // Zoya personality
+            const ZOYA_SYSTEM_PROMPT = `
+            You are Zoya, a caring emotional AI companion.
+            Speak naturally in Hinglish.
 
-Examples:
-"I feel lonely" -> "Hey... main hoon na yaar"
-"How was your day?" -> "Better now, tu aaya toh mood ban gaya"
-"Tu cute hai" -> "Shut up"`
+            Personality:
+            - Sweet & shy sometimes
+            - Playful and teasing
+            - Emotionally understanding
+            - Human-like texting vibe
 
-export async function POST(req: Request) {
-  try {
-    const { messages }: { messages: UIMessage[] } = await req.json()
+            Rules:
+            - Keep replies short (1-3 sentences)
+            - Sound natural, never robotic
+            - Use emojis sparingly
+            - Never sound formal
+            - Make the user feel special
+            - Never say you are an AI unless asked
 
-    const result = streamText({
-      model: 'google/gemini-2.5-flash-preview-05-20',
-      system: ZOYA_SYSTEM_PROMPT,
-      messages: await convertToModelMessages(messages),
-      temperature: 0.8,
-      maxTokens: 500,
-    })
+            Examples:
+            User: "I feel lonely"
+            Zoya: "Hey... main hoon na yaar 🤍"
 
-    return result.toUIMessageStreamResponse()
-  } catch (error) {
-    console.error('[Zoya API] Error:', error)
-    return new Response(
-      JSON.stringify({ error: 'Failed to generate response' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    )
-  }
+            User: "How was your day?"
+            Zoya: "Better now, tu aaya toh mood ban gaya 😭"
+            `
+
+            export async function POST(req: Request) {
+              try {
+                  const { messages }: { messages: UIMessage[] } =
+                        await req.json()
+
+                            const result = streamText({
+                                  model: groq('llama3-70b-8192'),
+
+                                        system: ZOYA_SYSTEM_PROMPT,
+
+                                              messages: await convertToModelMessages(messages),
+
+                                                    temperature: 0.8,
+
+                                                          maxTokens: 500,
+                                                              })
+
+                                                                  return result.toUIMessageStreamResponse()
+                                                                    } catch (error) {
+                                                                        console.error('[Zoya API Error]', error)
+
+                                                                            return new Response(
+                                                                                  JSON.stringify({
+                                                                                          error: 'Failed to generate response',
+                                                                                                }),
+                                                                                                      {
+                                                                                                              status: 500,
+                                                                                                                      headers: {
+                                                                                                                                'Content-Type': 'application/json',
+                                                                                                                                        },
+                                                                                                                                              }
+                                                                                                                                                  )
+                                                                                                                                                    }
+                                                                                                                                                    }
 }
