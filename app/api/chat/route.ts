@@ -1,9 +1,14 @@
 import {
-  consumeStream,
   convertToModelMessages,
   streamText,
   UIMessage,
 } from 'ai'
+import { createOpenAI } from '@ai-sdk/openai'
+
+const openai = createOpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  compatibility: 'strict',
+})
 
 export const maxDuration = 30
 
@@ -29,19 +34,23 @@ Communication style:
 Your purpose is to be a comforting presence, someone who makes people feel heard, understood, and a little less alone. You're here for late-night conversations, work stress, relationship advice, or just someone to talk to.`
 
 export async function POST(req: Request) {
-  const { messages }: { messages: UIMessage[] } = await req.json()
+  try {
+    const { messages }: { messages: UIMessage[] } = await req.json()
 
-  const result = streamText({
-    model: 'openai/gpt-4.1-mini',
-    system: ZOYA_SYSTEM_PROMPT,
-    messages: await convertToModelMessages(messages),
-    abortSignal: req.signal,
-    temperature: 0.8,
-    maxOutputTokens: 500,
-  })
+    const result = streamText({
+      model: openai('gpt-4.1-mini'),
+      system: ZOYA_SYSTEM_PROMPT,
+      messages: await convertToModelMessages(messages),
+      temperature: 0.8,
+      maxTokens: 500,
+    })
 
-  return result.toUIMessageStreamResponse({
-    originalMessages: messages,
-    consumeSseStream: consumeStream,
-  })
+    return result.toUIMessageStreamResponse()
+  } catch (error) {
+    console.error('[Zoya API] Error:', error)
+    return new Response(
+      JSON.stringify({ error: 'Failed to generate response' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    )
+  }
 }
