@@ -3,11 +3,10 @@ import {
   streamText,
   UIMessage,
 } from 'ai'
-import { createOpenAI } from '@ai-sdk/openai'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 
-const openai = createOpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  compatibility: 'strict',
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GEMINI_API_KEY,
 })
 
 export const maxDuration = 30
@@ -38,7 +37,7 @@ export async function POST(req: Request) {
     const { messages }: { messages: UIMessage[] } = await req.json()
 
     const result = streamText({
-      model: openai('gpt-4.1-mini'),
+      model: google('gemini-2.0-flash'),
       system: ZOYA_SYSTEM_PROMPT,
       messages: await convertToModelMessages(messages),
       temperature: 0.8,
