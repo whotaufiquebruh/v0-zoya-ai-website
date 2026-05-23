@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion"
 import { ArrowRight } from "lucide-react"
+import Link from "next/link"
 
 export function CTASection() {
   return (
@@ -40,22 +41,26 @@ export function CTASection() {
               </p>
               
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <motion.button
-                  className="group flex items-center gap-2 px-8 py-4 rounded-full bg-background text-foreground font-medium text-base hover:bg-background/90 transition-all duration-300"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  Get Early Access
-                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
-                </motion.button>
+                <Link href="/chat">
+                  <motion.button
+                    className="group flex items-center gap-2 px-8 py-4 rounded-full bg-background text-foreground font-medium text-base hover:bg-background/90 transition-all duration-300"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    Start Talking
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
+                  </motion.button>
+                </Link>
                 
-                <motion.button
-                  className="flex items-center gap-2 px-8 py-4 rounded-full border border-background/20 text-background font-medium text-base hover:bg-background/10 transition-all duration-300"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  Learn More
-                </motion.button>
+                <Link href="#features">
+                  <motion.button
+                    className="flex items-center gap-2 px-8 py-4 rounded-full border border-background/20 text-background font-medium text-base hover:bg-background/10 transition-all duration-300"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    Learn More
+                  </motion.button>
+                </Link>
               </div>
               
               {/* Trust indicators */}

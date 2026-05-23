@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion"
 import { ArrowRight, MessageCircle } from "lucide-react"
+import Link from "next/link"
 
 export function HeroSection() {
   return (
@@ -51,24 +52,28 @@ export function HeroSection() {
             transition={{ duration: 0.8, delay: 0.3 }}
             className="flex flex-col sm:flex-row items-center gap-4"
           >
-            <motion.button
-              className="group flex items-center gap-2 px-8 py-4 rounded-full bg-foreground text-background font-medium text-base hover:bg-foreground/90 transition-all duration-300"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              <MessageCircle className="w-5 h-5" />
-              Start Talking
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
-            </motion.button>
+            <Link href="/chat">
+              <motion.button
+                className="group flex items-center gap-2 px-8 py-4 rounded-full bg-foreground text-background font-medium text-base hover:bg-foreground/90 transition-all duration-300"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                <MessageCircle className="w-5 h-5" />
+                Start Talking
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
+              </motion.button>
+            </Link>
             
-            <motion.button
-              className="group flex items-center gap-2 px-8 py-4 rounded-full bg-card border border-border text-foreground font-medium text-base hover:bg-secondary transition-all duration-300"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              Meet Zoya
-              <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all duration-200" />
-            </motion.button>
+            <Link href="#demo">
+              <motion.button
+                className="group flex items-center gap-2 px-8 py-4 rounded-full bg-card border border-border text-foreground font-medium text-base hover:bg-secondary transition-all duration-300"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+              >
+                Meet Zoya
+                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all duration-200" />
+              </motion.button>
+            </Link>
           </motion.div>
         </div>
       </div>
