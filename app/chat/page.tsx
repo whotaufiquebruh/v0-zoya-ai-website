@@ -3,12 +3,80 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import Link from "next/link"
-import { Phone, PhoneOff, Mic, MicOff, X } from "lucide-react"
+import { Phone, PhoneOff, Mic, MicOff, X, ShieldCheck, ShieldX } from "lucide-react"
 
 interface Message {
   id: string
   role: "user" | "assistant"
   content: string
+}
+
+// Permission Prompt Modal Component
+function MicPermissionPrompt({
+  isOpen,
+  onAllow,
+  onDeny,
+}: {
+  isOpen: boolean
+  onAllow: () => void
+  onDeny: () => void
+}) {
+  if (!isOpen) return null
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[150] bg-foreground/40 backdrop-blur-sm flex items-center justify-center px-6"
+    >
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        transition={{ type: "spring", duration: 0.5 }}
+        className="bg-background rounded-3xl p-8 max-w-sm w-full shadow-2xl border border-border/50"
+      >
+        {/* Icon */}
+        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-6">
+          <Mic className="w-8 h-8 text-primary" />
+        </div>
+
+        {/* Title */}
+        <h3 className="font-serif text-xl font-medium text-foreground text-center mb-3">
+          Allow Microphone Access
+        </h3>
+
+        {/* Description */}
+        <p className="text-muted-foreground text-center text-sm mb-8 leading-relaxed">
+          Zoya needs access to your microphone to have a voice conversation with you. Your voice is only used during the call.
+        </p>
+
+        {/* Buttons */}
+        <div className="flex flex-col gap-3">
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={onAllow}
+            className="w-full py-4 rounded-2xl bg-emerald-500 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-colors"
+          >
+            <ShieldCheck className="w-5 h-5" />
+            Allow
+          </motion.button>
+          
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={onDeny}
+            className="w-full py-4 rounded-2xl bg-secondary text-foreground font-medium flex items-center justify-center gap-2 hover:bg-secondary/80 transition-colors"
+          >
+            <ShieldX className="w-5 h-5" />
+            Deny
+          </motion.button>
+        </div>
+      </motion.div>
+    </motion.div>
+  )
 }
 
 function TypingIndicator() {
@@ -314,6 +382,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isCallOpen, setIsCallOpen] = useState(false)
+  const [showPermissionPrompt, setShowPermissionPrompt] = useState(false)
+  const [permissionError, setPermissionError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -324,18 +394,39 @@ export default function ChatPage() {
     scrollToBottom()
   }, [messages, isLoading])
 
-  // Handle call button click - ask for mic permission first
-  const handleCallClick = async () => {
+  // Handle call button click - show in-app permission prompt first
+  const handleCallClick = () => {
+    setPermissionError(null)
+    setShowPermissionPrompt(true)
+  }
+
+  // User clicked "Allow" in the in-app prompt
+  const handleAllowPermission = async () => {
+    setShowPermissionPrompt(false)
     try {
-      // Request microphone permission before opening call
+      // This triggers the browser's native permission request
+      // Must be called from a user gesture (the Allow button click)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       // Permission granted - stop the stream (we'll get a new one in the call)
       stream.getTracks().forEach(track => track.stop())
       // Now open the call
       setIsCallOpen(true)
-    } catch {
-      alert("Microphone permission is required for voice calls. Please allow microphone access and try again.")
+    } catch (err) {
+      const error = err as Error
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        setPermissionError("Microphone permission was denied. Please allow access in your browser settings and try again.")
+      } else if (error.name === 'NotFoundError') {
+        setPermissionError("No microphone found. Please connect a microphone and try again.")
+      } else {
+        setPermissionError("Could not access microphone. Please check your device settings.")
+      }
     }
+  }
+
+  // User clicked "Deny" in the in-app prompt
+  const handleDenyPermission = () => {
+    setShowPermissionPrompt(false)
+    setPermissionError("Voice calls require microphone access. You can try again anytime.")
   }
 
   const sendMessage = async (text: string) => {
@@ -386,6 +477,42 @@ export default function ChatPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Permission Prompt Modal */}
+      <AnimatePresence>
+        {showPermissionPrompt && (
+          <MicPermissionPrompt
+            isOpen={showPermissionPrompt}
+            onAllow={handleAllowPermission}
+            onDeny={handleDenyPermission}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Permission Error Toast */}
+      <AnimatePresence>
+        {permissionError && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-24 left-4 right-4 z-[100] max-w-md mx-auto"
+          >
+            <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 shadow-lg flex items-start gap-3">
+              <ShieldX className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm text-red-800">{permissionError}</p>
+              </div>
+              <button 
+                onClick={() => setPermissionError(null)}
+                className="text-red-400 hover:text-red-600"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Voice Call Modal */}
       <AnimatePresence>
         {isCallOpen && (
