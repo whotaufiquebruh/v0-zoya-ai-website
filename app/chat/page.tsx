@@ -118,7 +118,7 @@ function VoiceCallModal({
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
-  const streamRef = useRef<MediaStream | null>(initialStream)
+  const streamRef = useRef<MediaStream | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const isRecordingRef = useRef(false)
@@ -126,7 +126,7 @@ function VoiceCallModal({
 
   const stopAllMedia = useCallback(() => {
     isClosingRef.current = true
-    if (mediaRecorderRef.current?.state === "recording") {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       try {
         mediaRecorderRef.current.stop()
       } catch {
@@ -150,78 +150,119 @@ function VoiceCallModal({
     }
   }, [])
 
-  const startRecording = useCallback(() => {
-    if (!streamRef.current || isRecordingRef.current || isClosingRef.current) return
+  const startRecording = useCallback(async () => {
+    if (isRecordingRef.current || isClosingRef.current) {
+      console.log("[v0] Skipping startRecording - already recording or closing")
+      return
+    }
+    
+    // Check if we have a valid stream with active tracks
+    if (!streamRef.current || streamRef.current.getAudioTracks().length === 0 || 
+        !streamRef.current.getAudioTracks().some(track => track.readyState === 'live')) {
+      console.log("[v0] Stream not valid, getting fresh stream")
+      try {
+        // Get a fresh stream
+        const freshStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        streamRef.current = freshStream
+      } catch (err) {
+        console.log("[v0] Failed to get fresh stream:", err)
+        setCallStatus("error")
+        setErrorMessage("Microphone access lost. Please try again.")
+        return
+      }
+    }
     
     isRecordingRef.current = true
     audioChunksRef.current = []
+    setCallStatus("listening")
     
     try {
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
-        ? 'audio/webm;codecs=opus' 
-        : MediaRecorder.isTypeSupported('audio/webm') 
-          ? 'audio/webm' 
-          : 'audio/mp4'
+      // Find supported mime type
+      let mimeType = ''
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus'
+      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+        mimeType = 'audio/webm'
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4'
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg'
+      }
       
-      const mediaRecorder = new MediaRecorder(streamRef.current, { mimeType })
+      console.log("[v0] Using mimeType:", mimeType || "default")
+      
+      const options: MediaRecorderOptions = mimeType ? { mimeType } : {}
+      const mediaRecorder = new MediaRecorder(streamRef.current, options)
       
       mediaRecorder.ondataavailable = (event) => {
+        console.log("[v0] Data available:", event.data.size)
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data)
         }
       }
       
       mediaRecorder.onstop = async () => {
+        console.log("[v0] Recording stopped, chunks:", audioChunksRef.current.length)
         isRecordingRef.current = false
         if (isClosingRef.current || audioChunksRef.current.length === 0) return
         
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType })
-        await sendVoiceToAPI(audioBlob)
+        const finalMimeType = mimeType || 'audio/webm'
+        const audioBlob = new Blob(audioChunksRef.current, { type: finalMimeType })
+        console.log("[v0] Created blob:", audioBlob.size, "bytes")
+        await sendVoiceToAPI(audioBlob, finalMimeType)
       }
       
-      mediaRecorder.onerror = () => {
+      mediaRecorder.onerror = (event) => {
+        console.log("[v0] MediaRecorder error:", event)
         isRecordingRef.current = false
         setCallStatus("error")
         setErrorMessage("Recording failed. Please try again.")
       }
       
       mediaRecorderRef.current = mediaRecorder
-      mediaRecorder.start()
-      setCallStatus("listening")
+      mediaRecorder.start(1000) // Collect data every second
+      console.log("[v0] MediaRecorder started")
       
       // Auto-stop after 8 seconds of recording
       setTimeout(() => {
-        if (mediaRecorderRef.current?.state === "recording" && !isClosingRef.current) {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording" && !isClosingRef.current) {
+          console.log("[v0] Auto-stopping recording")
           mediaRecorderRef.current.stop()
         }
       }, 8000)
-    } catch {
+    } catch (err) {
+      console.log("[v0] Error starting MediaRecorder:", err)
       isRecordingRef.current = false
       setCallStatus("error")
       setErrorMessage("Could not start recording. Please try again.")
     }
   }, [])
 
-  const sendVoiceToAPI = async (audioBlob: Blob) => {
+  const sendVoiceToAPI = async (audioBlob: Blob, mimeType: string) => {
     if (isClosingRef.current) return
     
     setCallStatus("speaking")
     setTranscript("")
     
     try {
+      const extension = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm'
       const formData = new FormData()
-      formData.append('audio', audioBlob, 'voice.webm')
+      formData.append('audio', audioBlob, `voice.${extension}`)
       
+      console.log("[v0] Sending to webhook...")
       const response = await fetch('https://zoyai.app.n8n.cloud/webhook/zoya-voice', {
         method: 'POST',
         body: formData,
       })
+      
+      console.log("[v0] Webhook response status:", response.status)
       
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`)
       }
       
       const data = await response.json()
+      console.log("[v0] Webhook response data:", data)
       
       if (isClosingRef.current) return
       
@@ -256,7 +297,8 @@ function VoiceCallModal({
           setTimeout(startRecording, 2000)
         }
       }
-    } catch {
+    } catch (err) {
+      console.log("[v0] Webhook error:", err)
       if (isClosingRef.current) return
       setTranscript("Connection issue... phir se try karo")
       setTimeout(() => {
@@ -267,13 +309,28 @@ function VoiceCallModal({
     }
   }
 
-  const startCall = useCallback(() => {
-    if (!initialStream) return
-    
+  const startCall = useCallback(async () => {
+    console.log("[v0] Starting call, initialStream:", !!initialStream)
     isClosingRef.current = false
-    streamRef.current = initialStream
     setCallStatus("connecting")
     setErrorMessage("")
+    
+    // Use initialStream or get a new one
+    if (initialStream && initialStream.getAudioTracks().some(track => track.readyState === 'live')) {
+      streamRef.current = initialStream
+      console.log("[v0] Using initial stream")
+    } else {
+      try {
+        console.log("[v0] Getting fresh stream for call")
+        const freshStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        streamRef.current = freshStream
+      } catch (err) {
+        console.log("[v0] Failed to get stream:", err)
+        setCallStatus("error")
+        setErrorMessage("Could not access microphone. Please check permissions.")
+        return
+      }
+    }
     
     // Start timer
     timerRef.current = setInterval(() => {
@@ -285,7 +342,7 @@ function VoiceCallModal({
       if (!isClosingRef.current) {
         startRecording()
       }
-    }, 1000)
+    }, 500)
   }, [initialStream, startRecording])
 
   const endCall = useCallback(() => {
@@ -313,13 +370,13 @@ function VoiceCallModal({
   }
 
   useEffect(() => {
-    if (isOpen && initialStream) {
+    if (isOpen) {
       startCall()
     }
     return () => {
       stopAllMedia()
     }
-  }, [isOpen, initialStream, startCall, stopAllMedia])
+  }, [isOpen, startCall, stopAllMedia])
 
   if (!isOpen) return null
 
