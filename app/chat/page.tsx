@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import Link from "next/link"
-import { Phone, PhoneOff, Mic, MicOff, X, ShieldCheck, ShieldX } from "lucide-react"
+import { Phone, PhoneOff, Mic, MicOff, Volume2, X, ShieldCheck, ShieldX } from "lucide-react"
 
 interface Message {
   id: string
@@ -37,19 +37,24 @@ function MicPermissionPrompt({
         transition={{ type: "spring", duration: 0.5 }}
         className="bg-background rounded-3xl p-8 max-w-sm w-full shadow-2xl border border-border/50"
       >
-        {/* Icon */}
-        <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-6">
-          <Mic className="w-8 h-8 text-primary" />
+        {/* Icons */}
+        <div className="flex items-center justify-center gap-3 mb-6">
+          <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center">
+            <Mic className="w-7 h-7 text-primary" />
+          </div>
+          <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center">
+            <Volume2 className="w-7 h-7 text-emerald-500" />
+          </div>
         </div>
 
         {/* Title */}
         <h3 className="font-serif text-xl font-medium text-foreground text-center mb-3">
-          Allow Microphone Access
+          Allow Microphone & Speaker
         </h3>
 
         {/* Description */}
         <p className="text-muted-foreground text-center text-sm mb-8 leading-relaxed">
-          Zoya needs access to your microphone to have a voice conversation with you. Your voice is only used during the call.
+          Zoya needs access to your microphone to hear you and speaker to talk back. Your voice is only used during the call.
         </p>
 
         {/* Buttons */}
@@ -61,7 +66,7 @@ function MicPermissionPrompt({
             className="w-full py-4 rounded-2xl bg-emerald-500 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-colors"
           >
             <ShieldCheck className="w-5 h-5" />
-            Allow
+            Allow Both
           </motion.button>
           
           <motion.button
@@ -621,6 +626,24 @@ export default function ChatPage() {
       // This triggers the browser's native permission request
       // Must be called from a user gesture (the Allow button click)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      
+      // Initialize AudioContext to enable speaker output (required for mobile)
+      // This must be done from a user gesture to work on iOS/Android
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      if (AudioContextClass) {
+        const audioCtx = new AudioContextClass()
+        // Resume if suspended (required on iOS)
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume()
+        }
+        // Play a silent sound to fully unlock audio on mobile
+        const silentBuffer = audioCtx.createBuffer(1, 1, 22050)
+        const source = audioCtx.createBufferSource()
+        source.buffer = silentBuffer
+        source.connect(audioCtx.destination)
+        source.start(0)
+      }
+      
       // Permission granted - keep the stream and pass it to the call modal
       setActiveStream(stream)
       setIsCallOpen(true)
