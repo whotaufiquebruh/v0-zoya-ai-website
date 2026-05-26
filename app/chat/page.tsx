@@ -314,6 +314,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isCallOpen, setIsCallOpen] = useState(false)
+  const [micPermissionGranted, setMicPermissionGranted] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -323,6 +324,25 @@ export default function ChatPage() {
   useEffect(() => {
     scrollToBottom()
   }, [messages, isLoading])
+
+  // Request microphone permission on page load
+  useEffect(() => {
+    const requestMicPermission = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        // Permission granted - stop the stream immediately (we just needed permission)
+        stream.getTracks().forEach(track => track.stop())
+        setMicPermissionGranted(true)
+      } catch {
+        // User denied or error - we'll ask again when they try to call
+        setMicPermissionGranted(false)
+      }
+    }
+    
+    // Small delay to let page render first
+    const timer = setTimeout(requestMicPermission, 1000)
+    return () => clearTimeout(timer)
+  }, [])
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return
