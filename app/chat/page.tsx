@@ -123,9 +123,12 @@ function VoiceCallModal({
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const isRecordingRef = useRef(false)
   const isClosingRef = useRef(false)
+  const isPlayingRef = useRef(false)
+  const startRecordingRef = useRef<() => Promise<void>>(() => Promise.resolve())
 
   const stopAllMedia = useCallback(() => {
     isClosingRef.current = true
+    isPlayingRef.current = false
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       try {
         mediaRecorderRef.current.stop()
@@ -151,8 +154,8 @@ function VoiceCallModal({
   }, [])
 
   const startRecording = useCallback(async () => {
-    if (isRecordingRef.current || isClosingRef.current) {
-      console.log("[v0] Skipping startRecording - already recording or closing")
+    if (isRecordingRef.current || isClosingRef.current || isPlayingRef.current) {
+      console.log("[v0] Skipping startRecording - already recording, closing, or playing")
       return
     }
     
@@ -238,6 +241,11 @@ function VoiceCallModal({
     }
   }, [])
 
+  // Keep the ref updated with the latest startRecording function
+  useEffect(() => {
+    startRecordingRef.current = startRecording
+  }, [startRecording])
+
   const sendVoiceToAPI = async (audioBlob: Blob, mimeType: string) => {
     if (isClosingRef.current) return
     
@@ -266,46 +274,104 @@ function VoiceCallModal({
       
       if (isClosingRef.current) return
       
+      // Handle error responses from webhook
+      if (data.error) {
+        console.log("[v0] Webhook returned error:", data.error)
+        setTranscript("Sorry, couldn't understand that. Try again?")
+        setCallStatus("listening")
+        setTimeout(() => {
+          if (!isClosingRef.current && !isPlayingRef.current) {
+            startRecordingRef.current()
+          }
+        }, 2000)
+        return
+      }
+      
       if (data.reply) {
         setTranscript(data.reply)
       }
       
-      // Play audio response if available
-      if (data.audio && audioRef.current) {
-        audioRef.current.src = data.audio
-        audioRef.current.onended = () => {
+      // Play audio response if available (support both "audio" and "audioUrl" keys)
+      const audioUrl = data.audio || data.audioUrl
+      if (audioUrl) {
+        console.log("[v0] Playing audio from:", audioUrl)
+        isPlayingRef.current = true
+        
+        // Create a new audio element for better mobile compatibility
+        const audio = new Audio()
+        audio.crossOrigin = "anonymous"
+        audioRef.current = audio
+        
+        // Set up event handlers before setting src
+        audio.onloadeddata = () => {
+          console.log("[v0] Audio loaded, duration:", audio.duration)
+        }
+        
+        audio.onplay = () => {
+          console.log("[v0] Audio playback started")
+          isPlayingRef.current = true
+          setCallStatus("speaking")
+        }
+        
+        audio.onended = () => {
+          console.log("[v0] Audio playback ended")
+          isPlayingRef.current = false
           if (!isClosingRef.current) {
-            startRecording()
+            setCallStatus("listening")
+            setTimeout(() => {
+              if (!isClosingRef.current && !isPlayingRef.current) {
+                startRecordingRef.current()
+              }
+            }, 500)
           }
         }
-        audioRef.current.onerror = () => {
+        
+        audio.onerror = (e) => {
+          console.log("[v0] Audio playback error:", e)
+          isPlayingRef.current = false
           if (!isClosingRef.current) {
-            setTimeout(startRecording, 1500)
+            setCallStatus("error")
+            setErrorMessage("Could not play Zoya's reply audio. Tap Try Again.")
           }
         }
+        
+        // Set source and try to play
+        audio.src = audioUrl
+        audio.load()
+        
         try {
-          await audioRef.current.play()
-        } catch {
-          // Autoplay failed, continue anyway
-          if (!isClosingRef.current) {
-            setTimeout(startRecording, 2000)
-          }
+          await audio.play()
+          console.log("[v0] Audio play() succeeded")
+        } catch (playError) {
+          console.log("[v0] Audio play() failed:", playError)
+          isPlayingRef.current = false
+          // On mobile, autoplay might be blocked - show a message but continue
+          setTranscript(data.reply || "Zoya replied but audio couldn't play automatically")
+          setCallStatus("listening")
+          setTimeout(() => {
+            if (!isClosingRef.current && !isPlayingRef.current) {
+              startRecordingRef.current()
+            }
+          }, 2000)
         }
       } else {
         // No audio URL, wait and continue listening
+        console.log("[v0] No audio in response, continuing...")
         if (!isClosingRef.current) {
-          setTimeout(startRecording, 2000)
+          setCallStatus("listening")
+          setTimeout(() => {
+            if (!isClosingRef.current && !isPlayingRef.current) {
+              startRecordingRef.current()
+            }
+          }, 2000)
         }
       }
     } catch (err) {
       console.log("[v0] Webhook error:", err)
       if (isClosingRef.current) return
-      setTranscript("Connection issue... phir se try karo")
-      setTimeout(() => {
-        if (!isClosingRef.current) {
-          startRecording()
-        }
-      }, 2000)
+      setCallStatus("error")
+      setErrorMessage("Connection issue... tap Try Again")
+      setTranscript("")
     }
   }
 
