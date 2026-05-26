@@ -1,10 +1,15 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
-import { useChat } from "@ai-sdk/react"
-import { DefaultChatTransport } from "ai"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import Link from "next/link"
+import { Phone, PhoneOff, Mic, MicOff, X } from "lucide-react"
+
+interface Message {
+  id: string
+  role: "user" | "assistant"
+  content: string
+}
 
 function TypingIndicator() {
   return (
@@ -28,23 +33,288 @@ function TypingIndicator() {
   )
 }
 
-function getMessageText(message: { parts?: Array<{ type: string; text?: string }> }): string {
-  if (!message.parts || !Array.isArray(message.parts)) return ""
-  return message.parts
-    .filter((p): p is { type: "text"; text: string } => p.type === "text")
-    .map((p) => p.text)
-    .join("")
+function VoiceCallModal({ 
+  isOpen, 
+  onClose 
+}: { 
+  isOpen: boolean
+  onClose: () => void 
+}) {
+  const [callStatus, setCallStatus] = useState<"connecting" | "listening" | "speaking" | "idle">("idle")
+  const [callDuration, setCallDuration] = useState(0)
+  const [isMuted, setIsMuted] = useState(false)
+  const [transcript, setTranscript] = useState("")
+  
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
+  const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  const startCall = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      setCallStatus("connecting")
+      
+      // Start timer
+      timerRef.current = setInterval(() => {
+        setCallDuration(prev => prev + 1)
+      }, 1000)
+
+      setTimeout(() => {
+        setCallStatus("listening")
+        startRecording()
+      }, 1000)
+    } catch {
+      alert("Microphone permission denied. Please allow microphone access.")
+      onClose()
+    }
+  }, [onClose])
+
+  const startRecording = () => {
+    if (!streamRef.current) return
+    
+    audioChunksRef.current = []
+    const mediaRecorder = new MediaRecorder(streamRef.current, {
+      mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+    })
+    
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunksRef.current.push(event.data)
+      }
+    }
+    
+    mediaRecorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+      await sendVoiceToAPI(audioBlob)
+    }
+    
+    mediaRecorderRef.current = mediaRecorder
+    mediaRecorder.start()
+    
+    // Auto-stop after 10 seconds of recording
+    setTimeout(() => {
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop()
+      }
+    }, 10000)
+  }
+
+  const sendVoiceToAPI = async (audioBlob: Blob) => {
+    setCallStatus("speaking")
+    
+    try {
+      const formData = new FormData()
+      formData.append('audio', audioBlob, 'voice.webm')
+      
+      const response = await fetch('/api/voice', {
+        method: 'POST',
+        body: formData,
+      })
+      
+      const data = await response.json()
+      setTranscript(data.reply)
+      
+      // Play audio response if available
+      if (data.audio) {
+        if (audioRef.current) {
+          audioRef.current.src = data.audio
+          audioRef.current.play()
+          audioRef.current.onended = () => {
+            setCallStatus("listening")
+            startRecording()
+          }
+        }
+      } else {
+        // If no audio, wait and continue listening
+        setTimeout(() => {
+          setCallStatus("listening")
+          startRecording()
+        }, 3000)
+      }
+    } catch {
+      setTranscript("Connection issue... trying again")
+      setTimeout(() => {
+        setCallStatus("listening")
+        startRecording()
+      }, 2000)
+    }
+  }
+
+  const endCall = () => {
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop()
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+    }
+    setCallStatus("idle")
+    setCallDuration(0)
+    setTranscript("")
+    onClose()
+  }
+
+  const toggleMute = () => {
+    if (streamRef.current) {
+      streamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = isMuted
+      })
+      setIsMuted(!isMuted)
+    }
+  }
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+  }
+
+  useEffect(() => {
+    if (isOpen) {
+      startCall()
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+      }
+    }
+  }, [isOpen, startCall])
+
+  if (!isOpen) return null
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[100] bg-gradient-to-b from-background via-background to-primary/10"
+    >
+      <audio ref={audioRef} className="hidden" />
+      
+      {/* Close button */}
+      <button 
+        onClick={endCall}
+        className="absolute top-6 right-6 p-2 rounded-full bg-secondary/50 hover:bg-secondary transition-colors"
+      >
+        <X className="w-6 h-6 text-foreground" />
+      </button>
+
+      <div className="h-full flex flex-col items-center justify-center px-6">
+        {/* Profile Picture with Glow */}
+        <motion.div 
+          className="relative mb-8"
+          animate={callStatus === "speaking" ? { scale: [1, 1.05, 1] } : {}}
+          transition={{ duration: 1.5, repeat: Infinity }}
+        >
+          {/* Outer glow rings */}
+          {callStatus !== "idle" && (
+            <>
+              <motion.div
+                className="absolute inset-0 rounded-full bg-primary/20"
+                animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                style={{ width: 160, height: 160, margin: -20 }}
+              />
+              <motion.div
+                className="absolute inset-0 rounded-full bg-primary/10"
+                animate={{ scale: [1, 1.8, 1], opacity: [0.3, 0, 0.3] }}
+                transition={{ duration: 2, repeat: Infinity, delay: 0.5 }}
+                style={{ width: 160, height: 160, margin: -20 }}
+              />
+            </>
+          )}
+          
+          {/* Profile circle */}
+          <div className="w-32 h-32 rounded-full bg-gradient-to-br from-primary/80 to-primary flex items-center justify-center shadow-2xl shadow-primary/30">
+            <span className="text-white font-serif font-semibold text-5xl">Z</span>
+          </div>
+          
+          {/* Online indicator */}
+          <span className="absolute bottom-2 right-2 w-5 h-5 bg-emerald-500 rounded-full border-4 border-background"></span>
+        </motion.div>
+
+        {/* Name and Status */}
+        <h2 className="font-serif text-3xl font-medium text-foreground mb-2">Zoya</h2>
+        <p className="text-muted-foreground mb-2">
+          {callStatus === "connecting" && "Connecting..."}
+          {callStatus === "listening" && "Listening to you..."}
+          {callStatus === "speaking" && "Speaking..."}
+          {callStatus === "idle" && "Call ended"}
+        </p>
+        
+        {/* Call Timer */}
+        <p className="text-2xl font-mono text-foreground/80 mb-8">{formatTime(callDuration)}</p>
+
+        {/* Waveform Animation */}
+        <div className="flex items-center justify-center gap-1 h-16 mb-8">
+          {[...Array(12)].map((_, i) => (
+            <motion.div
+              key={i}
+              className="w-1 bg-primary/60 rounded-full"
+              animate={callStatus === "listening" || callStatus === "speaking" ? {
+                height: [16, Math.random() * 48 + 16, 16],
+              } : { height: 16 }}
+              transition={{
+                duration: 0.5,
+                repeat: Infinity,
+                delay: i * 0.05,
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Transcript */}
+        {transcript && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="max-w-md text-center mb-8 px-6 py-4 rounded-2xl bg-card/50 backdrop-blur border border-border/50"
+          >
+            <p className="text-foreground">{transcript}</p>
+          </motion.div>
+        )}
+
+        {/* Call Controls */}
+        <div className="flex items-center gap-6">
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={toggleMute}
+            className={`w-16 h-16 rounded-full flex items-center justify-center transition-colors ${
+              isMuted 
+                ? "bg-destructive/20 text-destructive" 
+                : "bg-secondary text-foreground"
+            }`}
+          >
+            {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+          </motion.button>
+          
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={endCall}
+            className="w-20 h-20 rounded-full bg-red-500 flex items-center justify-center shadow-lg shadow-red-500/30"
+          >
+            <PhoneOff className="w-8 h-8 text-white" />
+          </motion.button>
+        </div>
+      </div>
+    </motion.div>
+  )
 }
 
 export default function ChatPage() {
   const [input, setInput] = useState("")
+  const [messages, setMessages] = useState<Message[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [isCallOpen, setIsCallOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  
-  const { messages, sendMessage, status } = useChat({
-    transport: new DefaultChatTransport({ api: "/api/chat" }),
-  })
-
-  const isLoading = status === "streaming" || status === "submitted"
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -52,17 +322,63 @@ export default function ChatPage() {
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages, status])
+  }, [messages, isLoading])
+
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || isLoading) return
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      role: "user",
+      content: text.trim(),
+    }
+
+    setMessages(prev => [...prev, userMessage])
+    setInput("")
+    setIsLoading(true)
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text.trim() }),
+      })
+
+      const data = await response.json()
+
+      const assistantMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: data.reply || "Hey... ek second ruk 🤍",
+      }
+
+      setMessages(prev => [...prev, assistantMessage])
+    } catch {
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: "Yaar network issue hai... phir se try kar 🥺",
+      }
+      setMessages(prev => [...prev, errorMessage])
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim() || isLoading) return
-    sendMessage({ text: input })
-    setInput("")
+    sendMessage(input)
   }
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Voice Call Modal */}
+      <AnimatePresence>
+        {isCallOpen && (
+          <VoiceCallModal isOpen={isCallOpen} onClose={() => setIsCallOpen(false)} />
+        )}
+      </AnimatePresence>
+
       {/* Animated background */}
       <div className="fixed inset-0 -z-10 overflow-hidden">
         <div className="absolute top-1/4 -left-32 w-96 h-96 rounded-full bg-primary/10 blur-3xl" />
@@ -84,12 +400,25 @@ export default function ChatPage() {
               <p className="text-xs text-emerald-600">Online</p>
             </div>
           </Link>
-          <Link 
-            href="/"
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Back to Home
-          </Link>
+          
+          <div className="flex items-center gap-4">
+            {/* Call Button */}
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setIsCallOpen(true)}
+              className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-colors"
+            >
+              <Phone className="w-5 h-5 text-white" />
+            </motion.button>
+            
+            <Link 
+              href="/"
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Back
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -110,23 +439,20 @@ export default function ChatPage() {
                 Hey, I&apos;m Zoya
               </h2>
               <p className="text-muted-foreground max-w-md leading-relaxed">
-                I&apos;m here to listen, understand, and support you. Whatever&apos;s on your mind, you can share it with me. No judgment, just genuine conversation.
+                Main yahaan hoon tere liye. Kuch bhi share kar sakta hai mere saath. No judgment, bas genuine conversation.
               </p>
               <div className="flex flex-wrap justify-center gap-2 mt-8">
                 {[
-                  "How are you today?",
-                  "I need someone to talk to",
-                  "I&apos;m feeling stressed",
+                  "Kaise ho aaj?",
+                  "Kuch baat karni hai",
+                  "Feeling low today",
                 ].map((suggestion) => (
                   <button
                     key={suggestion}
-                    onClick={() => {
-                      const text = suggestion.replace(/&apos;/g, "'")
-                      sendMessage({ text })
-                    }}
+                    onClick={() => sendMessage(suggestion)}
                     className="px-4 py-2 rounded-full bg-secondary/50 border border-border/50 text-sm text-foreground hover:bg-secondary transition-colors"
                   >
-                    {suggestion.replace(/&apos;/g, "'")}
+                    {suggestion}
                   </button>
                 ))}
               </div>
@@ -136,40 +462,35 @@ export default function ChatPage() {
           {/* Messages */}
           <div className="flex flex-col gap-4 py-4">
             <AnimatePresence mode="popLayout">
-              {messages.map((message) => {
-                const text = getMessageText(message)
-                if (!text) return null
-                
-                return (
-                  <motion.div
-                    key={message.id}
-                    initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    transition={{ duration: 0.3 }}
-                    className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
-                    {message.role === "assistant" && (
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/80 to-primary flex items-center justify-center mr-3 flex-shrink-0 mt-1">
-                        <span className="text-white font-serif font-semibold text-sm">Z</span>
-                      </div>
-                    )}
-                    <div
-                      className={`max-w-[75%] rounded-2xl px-4 py-3 ${
-                        message.role === "user"
-                          ? "bg-foreground text-background rounded-br-md"
-                          : "bg-card border border-border/50 text-foreground rounded-bl-md shadow-sm"
-                      }`}
-                    >
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
+              {messages.map((message) => (
+                <motion.div
+                  key={message.id}
+                  initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.3 }}
+                  className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  {message.role === "assistant" && (
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-primary/80 to-primary flex items-center justify-center mr-3 flex-shrink-0 mt-1">
+                      <span className="text-white font-serif font-semibold text-sm">Z</span>
                     </div>
-                  </motion.div>
-                )
-              })}
+                  )}
+                  <div
+                    className={`max-w-[75%] rounded-2xl px-4 py-3 ${
+                      message.role === "user"
+                        ? "bg-foreground text-background rounded-br-md"
+                        : "bg-card border border-border/50 text-foreground rounded-bl-md shadow-sm"
+                    }`}
+                  >
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                  </div>
+                </motion.div>
+              ))}
             </AnimatePresence>
 
             {/* Typing Indicator */}
-            {isLoading && messages[messages.length - 1]?.role === "user" && (
+            {isLoading && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -197,7 +518,7 @@ export default function ChatPage() {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Say something..."
+              placeholder="Type something..."
               disabled={isLoading}
               className="flex-1 bg-transparent text-foreground placeholder:text-muted-foreground outline-none text-sm"
             />
