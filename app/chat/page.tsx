@@ -103,129 +103,199 @@ function TypingIndicator() {
 
 function VoiceCallModal({ 
   isOpen, 
-  onClose 
+  onClose,
+  initialStream,
 }: { 
   isOpen: boolean
-  onClose: () => void 
+  onClose: () => void
+  initialStream: MediaStream | null
 }) {
-  const [callStatus, setCallStatus] = useState<"connecting" | "listening" | "speaking" | "idle">("idle")
+  const [callStatus, setCallStatus] = useState<"connecting" | "listening" | "speaking" | "error" | "idle">("idle")
   const [callDuration, setCallDuration] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
   const [transcript, setTranscript] = useState("")
+  const [errorMessage, setErrorMessage] = useState("")
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
-  const streamRef = useRef<MediaStream | null>(null)
+  const streamRef = useRef<MediaStream | null>(initialStream)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const isRecordingRef = useRef(false)
+  const isClosingRef = useRef(false)
 
-  const startCall = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      streamRef.current = stream
-      setCallStatus("connecting")
-      
-      // Start timer
-      timerRef.current = setInterval(() => {
-        setCallDuration(prev => prev + 1)
-      }, 1000)
-
-      setTimeout(() => {
-        setCallStatus("listening")
-        startRecording()
-      }, 1000)
-    } catch {
-      alert("Microphone permission denied. Please allow microphone access.")
-      onClose()
-    }
-  }, [onClose])
-
-  const startRecording = () => {
-    if (!streamRef.current) return
-    
-    audioChunksRef.current = []
-    const mediaRecorder = new MediaRecorder(streamRef.current, {
-      mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
-    })
-    
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        audioChunksRef.current.push(event.data)
-      }
-    }
-    
-    mediaRecorder.onstop = async () => {
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
-      await sendVoiceToAPI(audioBlob)
-    }
-    
-    mediaRecorderRef.current = mediaRecorder
-    mediaRecorder.start()
-    
-    // Auto-stop after 10 seconds of recording
-    setTimeout(() => {
-      if (mediaRecorderRef.current?.state === "recording") {
+  const stopAllMedia = useCallback(() => {
+    isClosingRef.current = true
+    if (mediaRecorderRef.current?.state === "recording") {
+      try {
         mediaRecorderRef.current.stop()
+      } catch {
+        // Ignore errors when stopping
       }
-    }, 10000)
-  }
+    }
+    mediaRecorderRef.current = null
+    isRecordingRef.current = false
+    
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+    if (timerRef.current) {
+      clearInterval(timerRef.current)
+      timerRef.current = null
+    }
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.src = ""
+    }
+  }, [])
+
+  const startRecording = useCallback(() => {
+    if (!streamRef.current || isRecordingRef.current || isClosingRef.current) return
+    
+    isRecordingRef.current = true
+    audioChunksRef.current = []
+    
+    try {
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+        ? 'audio/webm;codecs=opus' 
+        : MediaRecorder.isTypeSupported('audio/webm') 
+          ? 'audio/webm' 
+          : 'audio/mp4'
+      
+      const mediaRecorder = new MediaRecorder(streamRef.current, { mimeType })
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+      
+      mediaRecorder.onstop = async () => {
+        isRecordingRef.current = false
+        if (isClosingRef.current || audioChunksRef.current.length === 0) return
+        
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType })
+        await sendVoiceToAPI(audioBlob)
+      }
+      
+      mediaRecorder.onerror = () => {
+        isRecordingRef.current = false
+        setCallStatus("error")
+        setErrorMessage("Recording failed. Please try again.")
+      }
+      
+      mediaRecorderRef.current = mediaRecorder
+      mediaRecorder.start()
+      setCallStatus("listening")
+      
+      // Auto-stop after 8 seconds of recording
+      setTimeout(() => {
+        if (mediaRecorderRef.current?.state === "recording" && !isClosingRef.current) {
+          mediaRecorderRef.current.stop()
+        }
+      }, 8000)
+    } catch {
+      isRecordingRef.current = false
+      setCallStatus("error")
+      setErrorMessage("Could not start recording. Please try again.")
+    }
+  }, [])
 
   const sendVoiceToAPI = async (audioBlob: Blob) => {
+    if (isClosingRef.current) return
+    
     setCallStatus("speaking")
+    setTranscript("")
     
     try {
       const formData = new FormData()
       formData.append('audio', audioBlob, 'voice.webm')
       
-      const response = await fetch('/api/voice', {
+      const response = await fetch('https://zoyai.app.n8n.cloud/webhook/zoya-voice', {
         method: 'POST',
         body: formData,
       })
       
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`)
+      }
+      
       const data = await response.json()
-      setTranscript(data.reply)
+      
+      if (isClosingRef.current) return
+      
+      if (data.reply) {
+        setTranscript(data.reply)
+      }
       
       // Play audio response if available
-      if (data.audio) {
-        if (audioRef.current) {
-          audioRef.current.src = data.audio
-          audioRef.current.play()
-          audioRef.current.onended = () => {
-            setCallStatus("listening")
+      if (data.audio && audioRef.current) {
+        audioRef.current.src = data.audio
+        audioRef.current.onended = () => {
+          if (!isClosingRef.current) {
             startRecording()
           }
         }
+        audioRef.current.onerror = () => {
+          if (!isClosingRef.current) {
+            setTimeout(startRecording, 1500)
+          }
+        }
+        try {
+          await audioRef.current.play()
+        } catch {
+          // Autoplay failed, continue anyway
+          if (!isClosingRef.current) {
+            setTimeout(startRecording, 2000)
+          }
+        }
       } else {
-        // If no audio, wait and continue listening
-        setTimeout(() => {
-          setCallStatus("listening")
-          startRecording()
-        }, 3000)
+        // No audio URL, wait and continue listening
+        if (!isClosingRef.current) {
+          setTimeout(startRecording, 2000)
+        }
       }
     } catch {
-      setTranscript("Connection issue... trying again")
+      if (isClosingRef.current) return
+      setTranscript("Connection issue... phir se try karo")
       setTimeout(() => {
-        setCallStatus("listening")
-        startRecording()
+        if (!isClosingRef.current) {
+          startRecording()
+        }
       }, 2000)
     }
   }
 
-  const endCall = () => {
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.stop()
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-    }
+  const startCall = useCallback(() => {
+    if (!initialStream) return
+    
+    isClosingRef.current = false
+    streamRef.current = initialStream
+    setCallStatus("connecting")
+    setErrorMessage("")
+    
+    // Start timer
+    timerRef.current = setInterval(() => {
+      setCallDuration(prev => prev + 1)
+    }, 1000)
+
+    // Short delay then start listening
+    setTimeout(() => {
+      if (!isClosingRef.current) {
+        startRecording()
+      }
+    }, 1000)
+  }, [initialStream, startRecording])
+
+  const endCall = useCallback(() => {
+    stopAllMedia()
     setCallStatus("idle")
     setCallDuration(0)
     setTranscript("")
+    setErrorMessage("")
     onClose()
-  }
+  }, [stopAllMedia, onClose])
 
   const toggleMute = () => {
     if (streamRef.current) {
@@ -243,16 +313,13 @@ function VoiceCallModal({
   }
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && initialStream) {
       startCall()
     }
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop())
-      }
+      stopAllMedia()
     }
-  }, [isOpen, startCall])
+  }, [isOpen, initialStream, startCall, stopAllMedia])
 
   if (!isOpen) return null
 
@@ -313,8 +380,26 @@ function VoiceCallModal({
           {callStatus === "connecting" && "Connecting..."}
           {callStatus === "listening" && "Listening to you..."}
           {callStatus === "speaking" && "Speaking..."}
+          {callStatus === "error" && "Something went wrong"}
           {callStatus === "idle" && "Call ended"}
         </p>
+        
+        {/* Error Message */}
+        {callStatus === "error" && errorMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="max-w-md text-center mb-4 px-6 py-3 rounded-2xl bg-red-50 border border-red-200"
+          >
+            <p className="text-red-800 text-sm">{errorMessage}</p>
+            <button 
+              onClick={startRecording}
+              className="mt-2 text-sm text-red-600 underline hover:text-red-800"
+            >
+              Try Again
+            </button>
+          </motion.div>
+        )}
         
         {/* Call Timer */}
         <p className="text-2xl font-mono text-foreground/80 mb-8">{formatTime(callDuration)}</p>
@@ -384,6 +469,8 @@ export default function ChatPage() {
   const [isCallOpen, setIsCallOpen] = useState(false)
   const [showPermissionPrompt, setShowPermissionPrompt] = useState(false)
   const [permissionError, setPermissionError] = useState<string | null>(null)
+  const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
+  const isRequestingPermission = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -396,20 +483,23 @@ export default function ChatPage() {
 
   // Handle call button click - show in-app permission prompt first
   const handleCallClick = () => {
+    if (isRequestingPermission.current || isCallOpen) return
     setPermissionError(null)
     setShowPermissionPrompt(true)
   }
 
   // User clicked "Allow" in the in-app prompt
   const handleAllowPermission = async () => {
+    if (isRequestingPermission.current) return
+    isRequestingPermission.current = true
     setShowPermissionPrompt(false)
+    
     try {
       // This triggers the browser's native permission request
       // Must be called from a user gesture (the Allow button click)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      // Permission granted - stop the stream (we'll get a new one in the call)
-      stream.getTracks().forEach(track => track.stop())
-      // Now open the call
+      // Permission granted - keep the stream and pass it to the call modal
+      setActiveStream(stream)
       setIsCallOpen(true)
     } catch (err) {
       const error = err as Error
@@ -420,6 +510,8 @@ export default function ChatPage() {
       } else {
         setPermissionError("Could not access microphone. Please check your device settings.")
       }
+    } finally {
+      isRequestingPermission.current = false
     }
   }
 
@@ -427,6 +519,12 @@ export default function ChatPage() {
   const handleDenyPermission = () => {
     setShowPermissionPrompt(false)
     setPermissionError("Voice calls require microphone access. You can try again anytime.")
+  }
+
+  // Handle call close
+  const handleCallClose = () => {
+    setIsCallOpen(false)
+    setActiveStream(null)
   }
 
   const sendMessage = async (text: string) => {
@@ -515,8 +613,12 @@ export default function ChatPage() {
 
       {/* Voice Call Modal */}
       <AnimatePresence>
-        {isCallOpen && (
-          <VoiceCallModal isOpen={isCallOpen} onClose={() => setIsCallOpen(false)} />
+        {isCallOpen && activeStream && (
+          <VoiceCallModal 
+            isOpen={isCallOpen} 
+            onClose={handleCallClose}
+            initialStream={activeStream}
+          />
         )}
       </AnimatePresence>
 
