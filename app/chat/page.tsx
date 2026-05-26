@@ -314,7 +314,6 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isCallOpen, setIsCallOpen] = useState(false)
-  const [micPermissionGranted, setMicPermissionGranted] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -325,24 +324,19 @@ export default function ChatPage() {
     scrollToBottom()
   }, [messages, isLoading])
 
-  // Request microphone permission on page load
-  useEffect(() => {
-    const requestMicPermission = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        // Permission granted - stop the stream immediately (we just needed permission)
-        stream.getTracks().forEach(track => track.stop())
-        setMicPermissionGranted(true)
-      } catch {
-        // User denied or error - we'll ask again when they try to call
-        setMicPermissionGranted(false)
-      }
+  // Handle call button click - ask for mic permission first
+  const handleCallClick = async () => {
+    try {
+      // Request microphone permission before opening call
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Permission granted - stop the stream (we'll get a new one in the call)
+      stream.getTracks().forEach(track => track.stop())
+      // Now open the call
+      setIsCallOpen(true)
+    } catch {
+      alert("Microphone permission is required for voice calls. Please allow microphone access and try again.")
     }
-    
-    // Small delay to let page render first
-    const timer = setTimeout(requestMicPermission, 1000)
-    return () => clearTimeout(timer)
-  }, [])
+  }
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return
@@ -426,7 +420,7 @@ export default function ChatPage() {
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
-              onClick={() => setIsCallOpen(true)}
+              onClick={handleCallClick}
               className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/30 hover:bg-emerald-600 transition-colors"
             >
               <Phone className="w-5 h-5 text-white" />
