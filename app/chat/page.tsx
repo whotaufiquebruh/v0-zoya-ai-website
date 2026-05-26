@@ -119,34 +119,31 @@ function VoiceCallModal({
   const [callDuration, setCallDuration] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
   const [transcript, setTranscript] = useState("")
-  const [userSpeech, setUserSpeech] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
   
   const streamRef = useRef<MediaStream | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
-  const recognitionRef = useRef<SpeechRecognition | null>(null)
   const isClosingRef = useRef(false)
   const isPlayingRef = useRef(false)
-  const isListeningRef = useRef(false)
-  const startListeningRef = useRef<() => void>(() => {})
-
-  // Type declaration for SpeechRecognition
-  type SpeechRecognition = typeof window extends { SpeechRecognition: infer T } ? T extends new () => infer R ? R : never : never
+  const isRecordingRef = useRef(false)
+  const startRecordingRef = useRef<() => void>(() => {})
 
   const stopAllMedia = useCallback(() => {
     isClosingRef.current = true
     isPlayingRef.current = false
-    isListeningRef.current = false
+    isRecordingRef.current = false
     
-    if (recognitionRef.current) {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       try {
-        recognitionRef.current.stop()
+        mediaRecorderRef.current.stop()
       } catch {
         // Ignore
       }
-      recognitionRef.current = null
     }
+    mediaRecorderRef.current = null
     
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop())
@@ -162,229 +159,171 @@ function VoiceCallModal({
     }
   }, [])
 
-  const startListening = useCallback(() => {
-    if (isListeningRef.current || isClosingRef.current || isPlayingRef.current) {
+  const startRecording = useCallback(async () => {
+    if (isRecordingRef.current || isClosingRef.current || isPlayingRef.current) {
       return
     }
 
-    // Check for SpeechRecognition support
-    const SpeechRecognitionAPI = (window as unknown as { SpeechRecognition?: new () => SpeechRecognition; webkitSpeechRecognition?: new () => SpeechRecognition }).SpeechRecognition || 
-                                  (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognition }).webkitSpeechRecognition
-    
-    if (!SpeechRecognitionAPI) {
-      setCallStatus("error")
-      setErrorMessage("Speech recognition not supported in this browser. Try Chrome.")
-      return
+    // Get fresh stream if needed
+    if (!streamRef.current || !streamRef.current.getAudioTracks().some(track => track.readyState === 'live')) {
+      try {
+        const freshStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        streamRef.current = freshStream
+      } catch {
+        setCallStatus("error")
+        setErrorMessage("Microphone access lost. Please try again.")
+        return
+      }
     }
 
-    isListeningRef.current = true
+    isRecordingRef.current = true
+    audioChunksRef.current = []
     setCallStatus("listening")
-    setUserSpeech("")
-
-    const recognition = new SpeechRecognitionAPI()
-    recognitionRef.current = recognition as SpeechRecognition
-
-    // Configure for better recognition
-    recognition.lang = 'en-US'
-    recognition.continuous = false
-    recognition.interimResults = true
-    recognition.maxAlternatives = 3
-
-    let finalTranscript = ''
-    let silenceTimer: NodeJS.Timeout | null = null
-
-    recognition.onstart = () => {
-      // Start a silence timeout - if no speech detected in 10 seconds, stop
-      silenceTimer = setTimeout(() => {
-        if (isListeningRef.current && !finalTranscript) {
-          recognition.stop()
-        }
-      }, 10000)
-    }
-
-    recognition.onresult = (event: { resultIndex: number; results: { [key: number]: { isFinal: boolean; [key: number]: { transcript: string } } } }) => {
-      // Clear silence timer when we get results
-      if (silenceTimer) {
-        clearTimeout(silenceTimer)
-        silenceTimer = null
-      }
-
-      let interimTranscript = ''
-      
-      for (let i = event.resultIndex; i < Object.keys(event.results).length; i++) {
-        const result = event.results[i]
-        if (result.isFinal) {
-          finalTranscript += result[0].transcript
-        } else {
-          interimTranscript += result[0].transcript
-        }
-      }
-
-      // Show what user is saying in real-time
-      setUserSpeech(finalTranscript || interimTranscript)
-    }
-
-    recognition.onspeechend = () => {
-      // Give a short delay for any final processing
-      setTimeout(() => {
-        if (recognition && isListeningRef.current) {
-          recognition.stop()
-        }
-      }, 500)
-    }
-
-    recognition.onend = () => {
-      if (silenceTimer) {
-        clearTimeout(silenceTimer)
-      }
-      isListeningRef.current = false
-      
-      if (isClosingRef.current) return
-
-      if (finalTranscript.trim()) {
-        // We got speech - send it to the API
-        sendTextToAPI(finalTranscript.trim())
-      } else {
-        // No speech detected - try again
-        setTranscript("I didn't catch that... try speaking again")
-        setTimeout(() => {
-          if (!isClosingRef.current && !isPlayingRef.current) {
-            startListeningRef.current()
-          }
-        }, 1500)
-      }
-    }
-
-    recognition.onerror = (event: { error: string }) => {
-      if (silenceTimer) {
-        clearTimeout(silenceTimer)
-      }
-      isListeningRef.current = false
-
-      if (isClosingRef.current) return
-
-      if (event.error === 'no-speech') {
-        setTranscript("I didn't hear anything... speak up!")
-        setTimeout(() => {
-          if (!isClosingRef.current && !isPlayingRef.current) {
-            startListeningRef.current()
-          }
-        }, 1500)
-      } else if (event.error === 'audio-capture') {
-        setCallStatus("error")
-        setErrorMessage("Microphone not accessible. Please check permissions.")
-      } else if (event.error === 'not-allowed') {
-        setCallStatus("error")
-        setErrorMessage("Microphone permission denied.")
-      } else if (event.error === 'aborted') {
-        // User or system aborted - don't show error
-      } else {
-        setTranscript("Something went wrong... trying again")
-        setTimeout(() => {
-          if (!isClosingRef.current && !isPlayingRef.current) {
-            startListeningRef.current()
-          }
-        }, 1500)
-      }
-    }
+    setTranscript("")
 
     try {
-      recognition.start()
+      // Find best supported mime type
+      let mimeType = 'audio/webm'
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus'
+      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+        mimeType = 'audio/webm'
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4'
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg'
+      }
+
+      const mediaRecorder = new MediaRecorder(streamRef.current, { mimeType })
+      mediaRecorderRef.current = mediaRecorder
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstop = async () => {
+        isRecordingRef.current = false
+        
+        if (isClosingRef.current || audioChunksRef.current.length === 0) return
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType })
+        
+        // Send to webhook
+        await sendAudioToWebhook(audioBlob)
+      }
+
+      mediaRecorder.onerror = () => {
+        isRecordingRef.current = false
+        setCallStatus("error")
+        setErrorMessage("Recording failed. Please try again.")
+      }
+
+      // Start recording with timeslice to get data every second
+      mediaRecorder.start(1000)
+
+      // Auto-stop after 10 seconds
+      setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording" && !isClosingRef.current) {
+          mediaRecorderRef.current.stop()
+        }
+      }, 10000)
+
     } catch {
-      isListeningRef.current = false
+      isRecordingRef.current = false
       setCallStatus("error")
-      setErrorMessage("Could not start speech recognition. Please try again.")
+      setErrorMessage("Could not start recording. Please try again.")
     }
   }, [])
 
-  // Keep the ref updated
+  // Keep ref updated
   useEffect(() => {
-    startListeningRef.current = startListening
-  }, [startListening])
+    startRecordingRef.current = startRecording
+  }, [startRecording])
 
-  const sendTextToAPI = async (text: string) => {
+  const sendAudioToWebhook = async (audioBlob: Blob) => {
     if (isClosingRef.current) return
-    
+
     setCallStatus("processing")
-    setUserSpeech("")
-    setTranscript("Thinking...")
-    
+    setTranscript("Processing...")
+
     try {
-      // Send to the voice webhook with the transcribed text
+      const formData = new FormData()
+      formData.append('audio', audioBlob, 'voice.webm')
+
       const response = await fetch('https://zoyai.app.n8n.cloud/webhook/zoya-voice', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ message: text }),
+        body: formData,
       })
-      
+
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`)
       }
-      
+
       const data = await response.json()
-      
+
       if (isClosingRef.current) return
-      
+
+      // Handle error from webhook
       if (data.error) {
-        setTranscript("Hmm, let me try again...")
+        setTranscript("Couldn't understand that... try again")
         setCallStatus("listening")
         setTimeout(() => {
           if (!isClosingRef.current && !isPlayingRef.current) {
-            startListeningRef.current()
+            startRecordingRef.current()
           }
         }, 1500)
         return
       }
-      
+
+      // Show AI reply text
       if (data.reply) {
         setTranscript(data.reply)
       }
-      
-      // Play audio response if available
+
+      // Play audio response
       const audioUrl = data.audio || data.audioUrl
       if (audioUrl) {
         isPlayingRef.current = true
         setCallStatus("speaking")
-        
+
         const audio = new Audio()
         audio.crossOrigin = "anonymous"
         audioRef.current = audio
-        
+
         audio.onplay = () => {
           isPlayingRef.current = true
           setCallStatus("speaking")
         }
-        
+
         audio.onended = () => {
           isPlayingRef.current = false
           if (!isClosingRef.current) {
             setCallStatus("listening")
             setTimeout(() => {
               if (!isClosingRef.current && !isPlayingRef.current) {
-                startListeningRef.current()
+                startRecordingRef.current()
               }
-            }, 300)
+            }, 500)
           }
         }
-        
+
         audio.onerror = () => {
           isPlayingRef.current = false
           if (!isClosingRef.current) {
-            // Audio failed but we have text - continue listening
             setCallStatus("listening")
             setTimeout(() => {
               if (!isClosingRef.current && !isPlayingRef.current) {
-                startListeningRef.current()
+                startRecordingRef.current()
               }
             }, 2000)
           }
         }
-        
+
         audio.src = audioUrl
         audio.load()
-        
+
         try {
           await audio.play()
         } catch {
@@ -392,16 +331,16 @@ function VoiceCallModal({
           setCallStatus("listening")
           setTimeout(() => {
             if (!isClosingRef.current && !isPlayingRef.current) {
-              startListeningRef.current()
+              startRecordingRef.current()
             }
           }, 2000)
         }
       } else {
-        // No audio - just continue listening after showing response
+        // No audio URL - continue listening
         setCallStatus("listening")
         setTimeout(() => {
           if (!isClosingRef.current && !isPlayingRef.current) {
-            startListeningRef.current()
+            startRecordingRef.current()
           }
         }, 2500)
       }
@@ -411,7 +350,7 @@ function VoiceCallModal({
       setCallStatus("listening")
       setTimeout(() => {
         if (!isClosingRef.current && !isPlayingRef.current) {
-          startListeningRef.current()
+          startRecordingRef.current()
         }
       }, 2000)
     }
@@ -422,7 +361,6 @@ function VoiceCallModal({
     setCallStatus("connecting")
     setErrorMessage("")
     setTranscript("")
-    setUserSpeech("")
     
     // Use initialStream or get a new one
     if (initialStream && initialStream.getAudioTracks().some(track => track.readyState === 'live')) {
@@ -443,20 +381,19 @@ function VoiceCallModal({
       setCallDuration(prev => prev + 1)
     }, 1000)
 
-    // Short delay then start listening
+    // Short delay then start recording
     setTimeout(() => {
       if (!isClosingRef.current) {
-        startListening()
+        startRecording()
       }
     }, 500)
-  }, [initialStream, startListening])
+  }, [initialStream, startRecording])
 
   const endCall = useCallback(() => {
     stopAllMedia()
     setCallStatus("idle")
     setCallDuration(0)
     setTranscript("")
-    setUserSpeech("")
     setErrorMessage("")
     onClose()
   }, [stopAllMedia, onClose])
