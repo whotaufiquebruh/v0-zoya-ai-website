@@ -115,34 +115,38 @@ function VoiceCallModal({
   onClose: () => void
   initialStream: MediaStream | null
 }) {
-  const [callStatus, setCallStatus] = useState<"connecting" | "listening" | "speaking" | "error" | "idle">("idle")
+  const [callStatus, setCallStatus] = useState<"connecting" | "listening" | "processing" | "speaking" | "error" | "idle">("idle")
   const [callDuration, setCallDuration] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
   const [transcript, setTranscript] = useState("")
+  const [userSpeech, setUserSpeech] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
   
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const audioChunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
-  const isRecordingRef = useRef(false)
+  const recognitionRef = useRef<SpeechRecognition | null>(null)
   const isClosingRef = useRef(false)
   const isPlayingRef = useRef(false)
-  const startRecordingRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const isListeningRef = useRef(false)
+  const startListeningRef = useRef<() => void>(() => {})
+
+  // Type declaration for SpeechRecognition
+  type SpeechRecognition = typeof window extends { SpeechRecognition: infer T } ? T extends new () => infer R ? R : never : never
 
   const stopAllMedia = useCallback(() => {
     isClosingRef.current = true
     isPlayingRef.current = false
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+    isListeningRef.current = false
+    
+    if (recognitionRef.current) {
       try {
-        mediaRecorderRef.current.stop()
+        recognitionRef.current.stop()
       } catch {
-        // Ignore errors when stopping
+        // Ignore
       }
+      recognitionRef.current = null
     }
-    mediaRecorderRef.current = null
-    isRecordingRef.current = false
     
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop())
@@ -158,137 +162,179 @@ function VoiceCallModal({
     }
   }, [])
 
-  const startRecording = useCallback(async () => {
-    if (isRecordingRef.current || isClosingRef.current || isPlayingRef.current) {
-      console.log("[v0] Skipping startRecording - already recording, closing, or playing")
+  const startListening = useCallback(() => {
+    if (isListeningRef.current || isClosingRef.current || isPlayingRef.current) {
       return
     }
+
+    // Check for SpeechRecognition support
+    const SpeechRecognitionAPI = (window as unknown as { SpeechRecognition?: new () => SpeechRecognition; webkitSpeechRecognition?: new () => SpeechRecognition }).SpeechRecognition || 
+                                  (window as unknown as { webkitSpeechRecognition?: new () => SpeechRecognition }).webkitSpeechRecognition
     
-    // Check if we have a valid stream with active tracks
-    if (!streamRef.current || streamRef.current.getAudioTracks().length === 0 || 
-        !streamRef.current.getAudioTracks().some(track => track.readyState === 'live')) {
-      console.log("[v0] Stream not valid, getting fresh stream")
-      try {
-        // Get a fresh stream
-        const freshStream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        streamRef.current = freshStream
-      } catch (err) {
-        console.log("[v0] Failed to get fresh stream:", err)
-        setCallStatus("error")
-        setErrorMessage("Microphone access lost. Please try again.")
-        return
+    if (!SpeechRecognitionAPI) {
+      setCallStatus("error")
+      setErrorMessage("Speech recognition not supported in this browser. Try Chrome.")
+      return
+    }
+
+    isListeningRef.current = true
+    setCallStatus("listening")
+    setUserSpeech("")
+
+    const recognition = new SpeechRecognitionAPI()
+    recognitionRef.current = recognition as SpeechRecognition
+
+    // Configure for better recognition
+    recognition.lang = 'en-US'
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.maxAlternatives = 3
+
+    let finalTranscript = ''
+    let silenceTimer: NodeJS.Timeout | null = null
+
+    recognition.onstart = () => {
+      // Start a silence timeout - if no speech detected in 10 seconds, stop
+      silenceTimer = setTimeout(() => {
+        if (isListeningRef.current && !finalTranscript) {
+          recognition.stop()
+        }
+      }, 10000)
+    }
+
+    recognition.onresult = (event: { resultIndex: number; results: { [key: number]: { isFinal: boolean; [key: number]: { transcript: string } } } }) => {
+      // Clear silence timer when we get results
+      if (silenceTimer) {
+        clearTimeout(silenceTimer)
+        silenceTimer = null
+      }
+
+      let interimTranscript = ''
+      
+      for (let i = event.resultIndex; i < Object.keys(event.results).length; i++) {
+        const result = event.results[i]
+        if (result.isFinal) {
+          finalTranscript += result[0].transcript
+        } else {
+          interimTranscript += result[0].transcript
+        }
+      }
+
+      // Show what user is saying in real-time
+      setUserSpeech(finalTranscript || interimTranscript)
+    }
+
+    recognition.onspeechend = () => {
+      // Give a short delay for any final processing
+      setTimeout(() => {
+        if (recognition && isListeningRef.current) {
+          recognition.stop()
+        }
+      }, 500)
+    }
+
+    recognition.onend = () => {
+      if (silenceTimer) {
+        clearTimeout(silenceTimer)
+      }
+      isListeningRef.current = false
+      
+      if (isClosingRef.current) return
+
+      if (finalTranscript.trim()) {
+        // We got speech - send it to the API
+        sendTextToAPI(finalTranscript.trim())
+      } else {
+        // No speech detected - try again
+        setTranscript("I didn't catch that... try speaking again")
+        setTimeout(() => {
+          if (!isClosingRef.current && !isPlayingRef.current) {
+            startListeningRef.current()
+          }
+        }, 1500)
       }
     }
-    
-    isRecordingRef.current = true
-    audioChunksRef.current = []
-    setCallStatus("listening")
-    
-    try {
-      // Find supported mime type
-      let mimeType = ''
-      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        mimeType = 'audio/webm;codecs=opus'
-      } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-        mimeType = 'audio/webm'
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        mimeType = 'audio/mp4'
-      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
-        mimeType = 'audio/ogg'
+
+    recognition.onerror = (event: { error: string }) => {
+      if (silenceTimer) {
+        clearTimeout(silenceTimer)
       }
-      
-      console.log("[v0] Using mimeType:", mimeType || "default")
-      
-      const options: MediaRecorderOptions = mimeType ? { mimeType } : {}
-      const mediaRecorder = new MediaRecorder(streamRef.current, options)
-      
-      mediaRecorder.ondataavailable = (event) => {
-        console.log("[v0] Data available:", event.data.size)
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data)
-        }
-      }
-      
-      mediaRecorder.onstop = async () => {
-        console.log("[v0] Recording stopped, chunks:", audioChunksRef.current.length)
-        isRecordingRef.current = false
-        if (isClosingRef.current || audioChunksRef.current.length === 0) return
-        
-        const finalMimeType = mimeType || 'audio/webm'
-        const audioBlob = new Blob(audioChunksRef.current, { type: finalMimeType })
-        console.log("[v0] Created blob:", audioBlob.size, "bytes")
-        await sendVoiceToAPI(audioBlob, finalMimeType)
-      }
-      
-      mediaRecorder.onerror = (event) => {
-        console.log("[v0] MediaRecorder error:", event)
-        isRecordingRef.current = false
+      isListeningRef.current = false
+
+      if (isClosingRef.current) return
+
+      if (event.error === 'no-speech') {
+        setTranscript("I didn't hear anything... speak up!")
+        setTimeout(() => {
+          if (!isClosingRef.current && !isPlayingRef.current) {
+            startListeningRef.current()
+          }
+        }, 1500)
+      } else if (event.error === 'audio-capture') {
         setCallStatus("error")
-        setErrorMessage("Recording failed. Please try again.")
+        setErrorMessage("Microphone not accessible. Please check permissions.")
+      } else if (event.error === 'not-allowed') {
+        setCallStatus("error")
+        setErrorMessage("Microphone permission denied.")
+      } else if (event.error === 'aborted') {
+        // User or system aborted - don't show error
+      } else {
+        setTranscript("Something went wrong... trying again")
+        setTimeout(() => {
+          if (!isClosingRef.current && !isPlayingRef.current) {
+            startListeningRef.current()
+          }
+        }, 1500)
       }
-      
-      mediaRecorderRef.current = mediaRecorder
-      mediaRecorder.start(1000) // Collect data every second
-      console.log("[v0] MediaRecorder started")
-      
-      // Auto-stop after 8 seconds of recording
-      setTimeout(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording" && !isClosingRef.current) {
-          console.log("[v0] Auto-stopping recording")
-          mediaRecorderRef.current.stop()
-        }
-      }, 8000)
-    } catch (err) {
-      console.log("[v0] Error starting MediaRecorder:", err)
-      isRecordingRef.current = false
+    }
+
+    try {
+      recognition.start()
+    } catch {
+      isListeningRef.current = false
       setCallStatus("error")
-      setErrorMessage("Could not start recording. Please try again.")
+      setErrorMessage("Could not start speech recognition. Please try again.")
     }
   }, [])
 
-  // Keep the ref updated with the latest startRecording function
+  // Keep the ref updated
   useEffect(() => {
-    startRecordingRef.current = startRecording
-  }, [startRecording])
+    startListeningRef.current = startListening
+  }, [startListening])
 
-  const sendVoiceToAPI = async (audioBlob: Blob, mimeType: string) => {
+  const sendTextToAPI = async (text: string) => {
     if (isClosingRef.current) return
     
-    setCallStatus("speaking")
-    setTranscript("")
+    setCallStatus("processing")
+    setUserSpeech("")
+    setTranscript("Thinking...")
     
     try {
-      const extension = mimeType.includes('mp4') ? 'mp4' : mimeType.includes('ogg') ? 'ogg' : 'webm'
-      const formData = new FormData()
-      formData.append('audio', audioBlob, `voice.${extension}`)
-      
-      console.log("[v0] Sending to webhook...")
+      // Send to the voice webhook with the transcribed text
       const response = await fetch('https://zoyai.app.n8n.cloud/webhook/zoya-voice', {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: text }),
       })
-      
-      console.log("[v0] Webhook response status:", response.status)
       
       if (!response.ok) {
         throw new Error(`API error: ${response.status}`)
       }
       
       const data = await response.json()
-      console.log("[v0] Webhook response data:", data)
       
       if (isClosingRef.current) return
       
-      // Handle error responses from webhook
       if (data.error) {
-        console.log("[v0] Webhook returned error:", data.error)
-        setTranscript("Sorry, couldn't understand that. Try again?")
+        setTranscript("Hmm, let me try again...")
         setCallStatus("listening")
         setTimeout(() => {
           if (!isClosingRef.current && !isPlayingRef.current) {
-            startRecordingRef.current()
+            startListeningRef.current()
           }
-        }, 2000)
+        }, 1500)
         return
       }
       
@@ -296,107 +342,96 @@ function VoiceCallModal({
         setTranscript(data.reply)
       }
       
-      // Play audio response if available (support both "audio" and "audioUrl" keys)
+      // Play audio response if available
       const audioUrl = data.audio || data.audioUrl
       if (audioUrl) {
-        console.log("[v0] Playing audio from:", audioUrl)
         isPlayingRef.current = true
+        setCallStatus("speaking")
         
-        // Create a new audio element for better mobile compatibility
         const audio = new Audio()
         audio.crossOrigin = "anonymous"
         audioRef.current = audio
         
-        // Set up event handlers before setting src
-        audio.onloadeddata = () => {
-          console.log("[v0] Audio loaded, duration:", audio.duration)
-        }
-        
         audio.onplay = () => {
-          console.log("[v0] Audio playback started")
           isPlayingRef.current = true
           setCallStatus("speaking")
         }
         
         audio.onended = () => {
-          console.log("[v0] Audio playback ended")
           isPlayingRef.current = false
           if (!isClosingRef.current) {
             setCallStatus("listening")
             setTimeout(() => {
               if (!isClosingRef.current && !isPlayingRef.current) {
-                startRecordingRef.current()
+                startListeningRef.current()
               }
-            }, 500)
+            }, 300)
           }
         }
         
-        audio.onerror = (e) => {
-          console.log("[v0] Audio playback error:", e)
+        audio.onerror = () => {
           isPlayingRef.current = false
           if (!isClosingRef.current) {
-            setCallStatus("error")
-            setErrorMessage("Could not play Zoya's reply audio. Tap Try Again.")
+            // Audio failed but we have text - continue listening
+            setCallStatus("listening")
+            setTimeout(() => {
+              if (!isClosingRef.current && !isPlayingRef.current) {
+                startListeningRef.current()
+              }
+            }, 2000)
           }
         }
         
-        // Set source and try to play
         audio.src = audioUrl
         audio.load()
         
         try {
           await audio.play()
-          console.log("[v0] Audio play() succeeded")
-        } catch (playError) {
-          console.log("[v0] Audio play() failed:", playError)
+        } catch {
           isPlayingRef.current = false
-          // On mobile, autoplay might be blocked - show a message but continue
-          setTranscript(data.reply || "Zoya replied but audio couldn't play automatically")
           setCallStatus("listening")
           setTimeout(() => {
             if (!isClosingRef.current && !isPlayingRef.current) {
-              startRecordingRef.current()
+              startListeningRef.current()
             }
           }, 2000)
         }
       } else {
-        // No audio URL, wait and continue listening
-        console.log("[v0] No audio in response, continuing...")
-        if (!isClosingRef.current) {
-          setCallStatus("listening")
-          setTimeout(() => {
-            if (!isClosingRef.current && !isPlayingRef.current) {
-              startRecordingRef.current()
-            }
-          }, 2000)
-        }
+        // No audio - just continue listening after showing response
+        setCallStatus("listening")
+        setTimeout(() => {
+          if (!isClosingRef.current && !isPlayingRef.current) {
+            startListeningRef.current()
+          }
+        }, 2500)
       }
-    } catch (err) {
-      console.log("[v0] Webhook error:", err)
+    } catch {
       if (isClosingRef.current) return
-      setCallStatus("error")
-      setErrorMessage("Connection issue... tap Try Again")
-      setTranscript("")
+      setTranscript("Connection issue... trying again")
+      setCallStatus("listening")
+      setTimeout(() => {
+        if (!isClosingRef.current && !isPlayingRef.current) {
+          startListeningRef.current()
+        }
+      }, 2000)
     }
   }
 
   const startCall = useCallback(async () => {
-    console.log("[v0] Starting call, initialStream:", !!initialStream)
     isClosingRef.current = false
     setCallStatus("connecting")
     setErrorMessage("")
+    setTranscript("")
+    setUserSpeech("")
     
     // Use initialStream or get a new one
     if (initialStream && initialStream.getAudioTracks().some(track => track.readyState === 'live')) {
       streamRef.current = initialStream
-      console.log("[v0] Using initial stream")
     } else {
       try {
-        console.log("[v0] Getting fresh stream for call")
         const freshStream = await navigator.mediaDevices.getUserMedia({ audio: true })
         streamRef.current = freshStream
-      } catch (err) {
-        console.log("[v0] Failed to get stream:", err)
+      } catch {
         setCallStatus("error")
         setErrorMessage("Could not access microphone. Please check permissions.")
         return
@@ -411,16 +446,17 @@ function VoiceCallModal({
     // Short delay then start listening
     setTimeout(() => {
       if (!isClosingRef.current) {
-        startRecording()
+        startListening()
       }
     }, 500)
-  }, [initialStream, startRecording])
+  }, [initialStream, startListening])
 
   const endCall = useCallback(() => {
     stopAllMedia()
     setCallStatus("idle")
     setCallDuration(0)
     setTranscript("")
+    setUserSpeech("")
     setErrorMessage("")
     onClose()
   }, [stopAllMedia, onClose])
@@ -507,10 +543,22 @@ function VoiceCallModal({
         <p className="text-muted-foreground mb-2">
           {callStatus === "connecting" && "Connecting..."}
           {callStatus === "listening" && "Listening to you..."}
+          {callStatus === "processing" && "Processing..."}
           {callStatus === "speaking" && "Speaking..."}
           {callStatus === "error" && "Something went wrong"}
           {callStatus === "idle" && "Call ended"}
         </p>
+        
+        {/* User Speech Display (real-time) */}
+        {userSpeech && callStatus === "listening" && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="max-w-md text-center mb-4 px-6 py-3 rounded-2xl bg-secondary/50"
+          >
+            <p className="text-foreground text-sm italic">&ldquo;{userSpeech}&rdquo;</p>
+          </motion.div>
+        )}
         
         {/* Error Message */}
         {callStatus === "error" && errorMessage && (
@@ -521,7 +569,7 @@ function VoiceCallModal({
           >
             <p className="text-red-800 text-sm">{errorMessage}</p>
             <button 
-              onClick={startRecording}
+              onClick={startListening}
               className="mt-2 text-sm text-red-600 underline hover:text-red-800"
             >
               Try Again
