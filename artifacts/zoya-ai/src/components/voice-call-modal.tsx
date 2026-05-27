@@ -23,6 +23,8 @@ export function VoiceCallModal({ isOpen, onClose, initialStream, onTranscript }:
   const chunksRef = useRef<Blob[]>([])
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const audioSourceRef = useRef<AudioBufferSourceNode | null>(null)
   const isClosingRef = useRef(false)
   const isPlayingRef = useRef(false)
   const isRecordingRef = useRef(false)
@@ -44,6 +46,10 @@ export function VoiceCallModal({ isOpen, onClose, initialStream, onTranscript }:
       audioRef.current.pause()
       audioRef.current.src = ""
     }
+    try { audioSourceRef.current?.stop() } catch { /* noop */ }
+    audioSourceRef.current = null
+    audioCtxRef.current?.close().catch(() => {})
+    audioCtxRef.current = null
   }, [])
 
   const startRecording = useCallback(async () => {
@@ -140,37 +146,36 @@ export function VoiceCallModal({ isOpen, onClose, initialStream, onTranscript }:
 
       if (!ttsRes.ok) throw new Error("TTS failed")
 
-      const audioBlob = await ttsRes.blob()
-      const audioUrl = URL.createObjectURL(audioBlob)
+      const audioArrayBuffer = await ttsRes.arrayBuffer()
+
+      // Ensure AudioContext is alive and resumed (bypasses browser autoplay policy)
+      if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+        audioCtxRef.current = new AudioContext()
+      }
+      const ctx = audioCtxRef.current
+      if (ctx.state === "suspended") await ctx.resume()
+
+      const audioBuffer = await ctx.decodeAudioData(audioArrayBuffer)
+      if (isClosingRef.current) return
+
       isPlayingRef.current = true
       setStatus("speaking")
 
-      const audio = new Audio(audioUrl)
-      audioRef.current = audio
+      const source = ctx.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(ctx.destination)
+      audioSourceRef.current = source
 
-      audio.onended = () => {
+      source.onended = () => {
         isPlayingRef.current = false
-        URL.revokeObjectURL(audioUrl)
+        audioSourceRef.current = null
         if (!isClosingRef.current) {
           setStatus("listening")
           setTimeout(() => { if (!isClosingRef.current && !isPlayingRef.current) startRecRef.current() }, 600)
         }
       }
 
-      audio.onerror = () => {
-        isPlayingRef.current = false
-        URL.revokeObjectURL(audioUrl)
-        if (!isClosingRef.current) {
-          setStatus("listening")
-          setTimeout(() => { if (!isClosingRef.current && !isPlayingRef.current) startRecRef.current() }, 1500)
-        }
-      }
-
-      try { await audio.play() } catch {
-        isPlayingRef.current = false
-        setStatus("listening")
-        setTimeout(() => { if (!isClosingRef.current && !isPlayingRef.current) startRecRef.current() }, 1500)
-      }
+      source.start(0)
     } catch {
       if (isClosingRef.current) return
       setTranscript("Connection issue… try again")
@@ -182,6 +187,15 @@ export function VoiceCallModal({ isOpen, onClose, initialStream, onTranscript }:
   const startCall = useCallback(async () => {
     isClosingRef.current = false
     setStatus("connecting"); setErrorMsg(""); setTranscript("")
+
+    // Create and unlock AudioContext during user gesture — this is critical so
+    // ctx.resume() succeeds later when we play TTS audio asynchronously.
+    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+      audioCtxRef.current = new AudioContext()
+    }
+    if (audioCtxRef.current.state === "suspended") {
+      await audioCtxRef.current.resume().catch(() => {})
+    }
 
     if (initialStream?.getAudioTracks().some(t => t.readyState === "live")) {
       streamRef.current = initialStream
