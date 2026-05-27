@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Zoya AI"
+version = "1.0.0"
+id = "zoya-ai-artifact"
+
+[[services]]
+localPort = 3000
+name = "Zoya AI"
+paths = ["/"]
+
+[services.env]
+PORT = "3000"
+BASE_PATH = "/"
+
+[services.development]
+run = "pnpm --filter @workspace/zoya-ai run dev"
+
+[services.production]
+serve = "static"
+
+[services.production.build]
+args = ["pnpm", "--filter", "@workspace/zoya-ai", "run", "build"]
+
+[services.production.build.env]
+NODE_ENV = "production"
+PORT = "3000"
+BASE_PATH = "/"
