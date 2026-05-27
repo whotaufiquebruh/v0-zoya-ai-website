@@ -2,14 +2,14 @@ import { Router } from "express";
 import Groq from "groq-sdk";
 import { pool, ensureSchema } from "../lib/zoya-db";
 import { getSession } from "../lib/zoya-session";
-import { buildSystemPrompt, GROQ_MODEL } from "../lib/zoya-ai";
+import { buildSystemPrompt, GROQ_MODEL, GROQ_VOICE_MODEL } from "../lib/zoya-ai";
 
 const router = Router();
 
 router.post("/chat", async (req, res) => {
   try {
     await ensureSchema();
-    const { message, conversationId } = req.body as { message?: string; conversationId?: string };
+    const { message, conversationId, mode } = req.body as { message?: string; conversationId?: string; mode?: string };
     if (!message?.trim()) {
       res.status(400).json({ error: "Message required" });
       return;
@@ -65,16 +65,17 @@ router.post("/chat", async (req, res) => {
     }
 
     const groq = new Groq({ apiKey: groqKey });
+    const isVoice = mode === "voice";
 
     const completion = await groq.chat.completions.create({
-      model: GROQ_MODEL,
+      model: isVoice ? GROQ_VOICE_MODEL : GROQ_MODEL,
       messages: [
-        { role: "system", content: buildSystemPrompt(memoryContext) },
+        { role: "system", content: buildSystemPrompt(memoryContext, isVoice) },
         ...history,
         { role: "user", content: message },
       ],
-      temperature: 0.85,
-      max_tokens: 300,
+      temperature: 0.80,
+      max_tokens: isVoice ? 120 : 300, // voice needs short answers for fast TTS
       top_p: 0.9,
     });
 

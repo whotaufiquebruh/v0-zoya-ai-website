@@ -94,7 +94,7 @@ export function VoiceCallModal({ isOpen, onClose, initialStream, onTranscript }:
 
       setTimeout(() => {
         if (mr.state === "recording" && !isClosingRef.current) mr.stop()
-      }, 8000)
+      }, 6000)
 
     } catch {
       isRecordingRef.current = false
@@ -130,7 +130,7 @@ export function VoiceCallModal({ isOpen, onClose, initialStream, onTranscript }:
       const chatRes = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userText }),
+        body: JSON.stringify({ message: userText, mode: "voice" }),
       })
       const { reply } = await chatRes.json()
       if (isClosingRef.current) return

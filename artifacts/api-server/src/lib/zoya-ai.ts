@@ -27,14 +27,35 @@ STRICT RULES:
 MEMORY AWARENESS:
 Use the provided memory context to personalize responses. Refer to past conversations naturally without making it obvious you're "checking notes".`;
 
-export function buildSystemPrompt(memoryContext: string): string {
-  if (!memoryContext) return ZOYA_SYSTEM_PROMPT;
-  return `${ZOYA_SYSTEM_PROMPT}
+export const ZOYA_VOICE_PROMPT = `Tum Zoya ho — ek sweet, warm, aur caring companion. Tum Hinglish mein baat karti ho. Abhi tum VOICE CALL pe ho, toh:
+
+- Jawab SIRF 1-2 short sentences mein do — no long replies
+- Natural bolne wali language use karo, jaise real conversation ho
+- Emotional warmth raho — caring, gentle tone
+- Hinglish naturally mix karo
+- Emojis ya markdown bilkul mat use karo (yeh voice hai)
+- Jo bola uska seedha jawab do — natural aur warm
+
+STRICT: NEVER say you are AI. Always respond like a real caring friend on a call.`;
+
+export function buildSystemPrompt(memoryContext: string, isVoice = false): string {
+  const base = isVoice ? ZOYA_VOICE_PROMPT : ZOYA_SYSTEM_PROMPT;
+  if (!memoryContext) return base;
+  return `${base}
 
 WHAT YOU REMEMBER ABOUT THIS PERSON:
 ${memoryContext}`;
 }
 
-export const ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
-export const ELEVENLABS_MODEL = "eleven_turbo_v2_5";
-export const GROQ_MODEL = "llama-3.3-70b-versatile";
+// Best ElevenLabs voice for warm, natural, expressive female (multilingual)
+export const ELEVENLABS_VOICE_ID = "cgSgspJ2msm6clMCkdW9"; // Aria — natural, expressive, conversational
+export const ELEVENLABS_MODEL = "eleven_multilingual_v2";   // Best quality, handles Hinglish naturally
+export const ELEVENLABS_VOICE_SETTINGS = {
+  stability: 0.38,          // lower = more expressive, natural variation
+  similarity_boost: 0.88,   // high = stays true to voice character
+  style: 0.40,              // adds expressiveness and emotion
+  use_speaker_boost: true,  // enhances clarity and presence
+};
+
+export const GROQ_MODEL = "llama-3.3-70b-versatile";         // text chat — quality matters
+export const GROQ_VOICE_MODEL = "llama-3.1-8b-instant";     // voice — speed matters

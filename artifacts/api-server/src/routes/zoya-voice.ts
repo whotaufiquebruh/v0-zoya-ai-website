@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL } from "../lib/zoya-ai";
+import { ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL, ELEVENLABS_VOICE_SETTINGS } from "../lib/zoya-ai";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -18,8 +18,19 @@ router.post("/voice/stt", upload.single("audio"), async (req, res) => {
       return;
     }
 
+    // nova-3 = latest + most accurate; language=multi handles Hinglish naturally
+    const params = new URLSearchParams({
+      model: "nova-3",
+      language: "multi",
+      smart_format: "true",
+      punctuate: "true",
+      filler_words: "false",
+      no_delay: "true",
+      utterance_end_ms: "1000",
+    });
+
     const response = await fetch(
-      "https://api.deepgram.com/v1/listen?model=nova-2&language=en-IN&smart_format=true&punctuate=true",
+      `https://api.deepgram.com/v1/listen?${params.toString()}`,
       {
         method: "POST",
         headers: {
@@ -37,7 +48,9 @@ router.post("/voice/stt", upload.single("audio"), async (req, res) => {
       return;
     }
 
-    const data = (await response.json()) as { results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> } };
+    const data = (await response.json()) as {
+      results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> };
+    };
     const transcript = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript ?? "";
     res.json({ transcript });
   } catch (err) {
@@ -60,8 +73,16 @@ router.post("/voice/tts", async (req, res) => {
       return;
     }
 
+    // Clean text for TTS — remove emojis and markdown that would be spoken aloud
+    const cleanText = text
+      .replace(/[\u{1F000}-\u{1FFFF}]/gu, "")
+      .replace(/[\u2600-\u27FF]/g, "")
+      .replace(/[*_`#]/g, "")
+      .trim()
+      .slice(0, 400); // keep short for speed
+
     const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=mp3_44100_128`,
       {
         method: "POST",
         headers: {
@@ -70,9 +91,9 @@ router.post("/voice/tts", async (req, res) => {
           "xi-api-key": apiKey,
         },
         body: JSON.stringify({
-          text: text.slice(0, 500),
+          text: cleanText,
           model_id: ELEVENLABS_MODEL,
-          voice_settings: { stability: 0.55, similarity_boost: 0.8, style: 0.25, use_speaker_boost: true },
+          voice_settings: ELEVENLABS_VOICE_SETTINGS,
         }),
       }
     );
