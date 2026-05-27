@@ -45,13 +45,15 @@ export function Header() {
           </div>
           
           {/* CTA Button */}
-          <motion.button
-            className="px-5 py-2.5 rounded-full bg-foreground text-background text-sm font-medium hover:bg-foreground/90 transition-colors duration-200"
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-          >
-            Get Early Access
-          </motion.button>
+          <Link href="/chat">
+            <motion.button
+              className="px-5 py-2.5 rounded-full gradient-pink text-white text-sm font-semibold shadow-glow-pink/40 hover:shadow-glow-pink transition-all duration-200"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              Chat with Zoya
+            </motion.button>
+          </Link>
         </nav>
       </div>
     </motion.header>

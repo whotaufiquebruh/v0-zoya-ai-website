@@ -1,0 +1,1 @@
+- [Proxy routing conflict](proxy-routing.md) — Next.js /api/* routes are intercepted by api-server; all backend logic must live in artifacts/api-server, not Next.js API routes.

@@ -23,9 +23,12 @@ export function Footer() {
           </div>
           
           {/* Copyright */}
-          <p className="text-sm text-muted-foreground">
-            &copy; 2026 Zoya AI. All rights reserved.
-          </p>
+          <div className="text-sm text-muted-foreground text-center">
+            <p>&copy; 2026 Zoya AI. All rights reserved.</p>
+            <p className="text-xs text-muted-foreground/50 mt-1">
+              Founded by Sk Taufique Hossain
+            </p>
+          </div>
         </div>
       </div>
     </footer>
