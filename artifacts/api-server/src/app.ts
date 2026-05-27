@@ -50,4 +50,24 @@ app.use(
 
 app.use("/api", router);
 
+if (process.env.NODE_ENV === "production") {
+  const pathMod = await import("path");
+  const { fileURLToPath } = await import("url");
+  const fsMod = await import("fs");
+
+  const __dirname = pathMod.default.dirname(fileURLToPath(import.meta.url));
+  const staticDir = pathMod.default.resolve(__dirname, "../../zoya-ai/dist");
+  const indexHtml = pathMod.default.join(staticDir, "index.html");
+
+  app.use(express.static(staticDir, { maxAge: "1d", etag: true }));
+
+  app.get("*", (_req, res) => {
+    if (fsMod.existsSync(indexHtml)) {
+      res.sendFile(indexHtml);
+    } else {
+      res.status(503).send("Frontend not built.");
+    }
+  });
+}
+
 export default app;

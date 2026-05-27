@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from "framer-motion"
-import { Plus, MessageCircle, Trash2, X } from "lucide-react"
+import { Plus, MessageCircle, X } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 
 interface Conversation {
@@ -101,17 +101,17 @@ export function RecentsSidebar({
                   key={c.id}
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -8 }}
+                  exit={{ opacity: 0, x: -8, transition: { duration: 0.15 } }}
                   transition={{ delay: i * 0.03 }}
-                  className={`group relative flex items-start gap-3 px-3 py-3 rounded-xl cursor-pointer transition-all ${
+                  className={`group relative flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer transition-all ${
                     activeId === c.id
                       ? "bg-accent/60 border border-primary/10"
                       : "hover:bg-secondary/70"
                   }`}
                   onClick={() => { onSelect(c.id); onClose() }}
                 >
-                  <div className="w-8 h-8 rounded-full gradient-pink flex items-center justify-center flex-shrink-0 mt-0.5 opacity-70">
-                    <MessageCircle className="w-3.5 h-3.5 text-white" />
+                  <div className="w-7 h-7 rounded-full gradient-pink flex items-center justify-center flex-shrink-0 opacity-70">
+                    <MessageCircle className="w-3 h-3 text-white" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate leading-snug">
@@ -122,15 +122,17 @@ export function RecentsSidebar({
                         {c.last_message}
                       </p>
                     )}
-                    <p className="text-[10px] text-muted-foreground/50 mt-1">
+                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">
                       {formatDistanceToNow(new Date(c.updated_at), { addSuffix: true })}
                     </p>
                   </div>
+                  {/* Always-visible delete × */}
                   <button
                     onClick={e => { e.stopPropagation(); onDelete(c.id) }}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity w-6 h-6 rounded-lg flex items-center justify-center hover:bg-destructive/10 hover:text-destructive flex-shrink-0"
+                    className="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-all"
+                    title="Delete chat"
                   >
-                    <Trash2 className="w-3 h-3" />
+                    <X className="w-3 h-3" />
                   </button>
                 </motion.div>
               ))}
