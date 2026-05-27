@@ -9,24 +9,22 @@ const router = Router();
 router.post("/chat", async (req, res) => {
   try {
     await ensureSchema();
-    const { message, conversationId, mode } = req.body as { message?: string; conversationId?: string; mode?: string };
-    if (!message?.trim()) {
-      res.status(400).json({ error: "Message required" });
-      return;
-    }
+    const { message, conversationId, mode } = req.body as {
+      message?: string; conversationId?: string; mode?: string;
+    };
+    if (!message?.trim()) { res.status(400).json({ error: "Message required" }); return; }
 
     const session = await getSession(req);
     const userId = session?.userId ?? null;
-
     let activeConversationId = conversationId ?? null;
 
     if (userId) {
       if (!activeConversationId) {
-        const convoResult = await pool.query(
+        const r = await pool.query(
           `INSERT INTO conversations (user_id, title) VALUES ($1, $2) RETURNING id`,
           [userId, message.slice(0, 60)]
         );
-        activeConversationId = convoResult.rows[0].id;
+        activeConversationId = r.rows[0].id;
       }
       await pool.query(
         `INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)`,
@@ -43,12 +41,11 @@ router.post("/chat", async (req, res) => {
         [activeConversationId]
       );
       history = msgResult.rows.reverse().slice(0, -1).map((r: { role: string; content: string }) => ({
-        role: r.role as "user" | "assistant",
-        content: r.content,
+        role: r.role as "user" | "assistant", content: r.content,
       }));
 
       const memResult = await pool.query(
-        `SELECT memory_key, memory_value FROM user_memory WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 15`,
+        `SELECT memory_key, memory_value FROM user_memory WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 20`,
         [userId]
       );
       if (memResult.rows.length > 0) {
@@ -60,8 +57,7 @@ router.post("/chat", async (req, res) => {
 
     const groqKey = process.env["GROQ_API_KEY"];
     if (!groqKey) {
-      res.json({ reply: "AI service not configured. Please add GROQ_API_KEY.", conversationId: activeConversationId });
-      return;
+      res.json({ reply: "AI service not configured.", conversationId: activeConversationId }); return;
     }
 
     const groq = new Groq({ apiKey: groqKey });
@@ -74,9 +70,9 @@ router.post("/chat", async (req, res) => {
         ...history,
         { role: "user", content: message },
       ],
-      temperature: 0.80,
-      max_tokens: isVoice ? 120 : 300, // voice needs short answers for fast TTS
-      top_p: 0.9,
+      temperature: 0.82,
+      max_tokens: isVoice ? 120 : 300,
+      top_p: 0.92,
     });
 
     const reply = completion.choices[0]?.message?.content ?? "Hey… main hoon na 🤍";
@@ -86,11 +82,9 @@ router.post("/chat", async (req, res) => {
         `INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'assistant', $2)`,
         [activeConversationId, reply]
       );
-      await pool.query(
-        `UPDATE conversations SET updated_at = NOW() WHERE id = $1`,
-        [activeConversationId]
-      );
-      await updateMemory(userId, message, activeConversationId);
+      await pool.query(`UPDATE conversations SET updated_at = NOW() WHERE id = $1`, [activeConversationId]);
+      // Run memory update asynchronously — doesn't block the response
+      updateMemory(userId, message, reply, activeConversationId).catch(() => {});
     }
 
     res.json({ reply, conversationId: activeConversationId });
@@ -100,41 +94,67 @@ router.post("/chat", async (req, res) => {
   }
 });
 
-async function updateMemory(userId: string, userMsg: string, _convId: string) {
-  try {
-    const lower = userMsg.toLowerCase();
-    const entries: Array<[string, string]> = [];
+// ── Smart memory extraction ───────────────────────────────────────────────────
 
-    if (lower.includes("my name is") || (lower.includes("main") && lower.includes("hoon"))) {
-      const nameMatch = userMsg.match(/my name is (\w+)/i) || userMsg.match(/main (\w+) hoon/i);
-      if (nameMatch) entries.push(["name", nameMatch[1]]);
-    }
+async function updateMemory(userId: string, userMsg: string, aiReply: string, _convId: string) {
+  const lower = userMsg.toLowerCase();
+  const entries: Array<[string, string]> = [];
 
-    const moodWords = ["sad", "happy", "lonely", "stressed", "excited", "upset", "anxious", "akela", "khush", "udaas"];
-    for (const word of moodWords) {
-      if (lower.includes(word)) { entries.push(["last_mood", word]); break; }
-    }
+  // Name
+  const nameMatch = userMsg.match(/(?:my name is|i(?:'m| am)|mera naam hai|main hoon)\s+([A-Za-z]{2,20})/i)
+    || userMsg.match(/(?:call me|mujhe bulao)\s+([A-Za-z]{2,20})/i);
+  if (nameMatch) entries.push(["name", nameMatch[1]]);
 
-    if (lower.includes("love") || lower.includes("favorite") || lower.includes("pasand")) {
-      entries.push(["interests_note", userMsg.slice(0, 100)]);
-    }
+  // Age
+  const ageMatch = userMsg.match(/(?:i(?:'m| am)|main hoon|meri umar|i am)\s+(\d{1,2})\s*(?:years old|sal ka|years)/i)
+    || userMsg.match(/(\d{1,2})\s*(?:year|sal)\s*(?:old|ka|ki)/i);
+  if (ageMatch) entries.push(["age", ageMatch[1]]);
 
-    for (const [key, value] of entries) {
-      await pool.query(
-        `INSERT INTO user_memory (user_id, memory_key, memory_value, updated_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (user_id, memory_key) DO UPDATE SET memory_value = $3, updated_at = NOW()`,
-        [userId, key, value]
-      );
-    }
+  // Mood
+  const moods: Record<string, string> = {
+    sad: "sad", unhappy: "sad", dukhi: "sad", udaas: "sad", upset: "upset",
+    happy: "happy", khush: "happy", excited: "excited", bored: "bored", bore: "bored",
+    lonely: "lonely", akela: "lonely", anxious: "anxious", stressed: "stressed",
+    tired: "tired", thaka: "tired", angry: "angry", gussa: "angry",
+  };
+  for (const [word, mood] of Object.entries(moods)) {
+    if (lower.includes(word)) { entries.push(["last_mood", mood]); break; }
+  }
 
+  // Relationship status
+  if (lower.match(/(?:my )?(?:girlfriend|boyfriend|gf|bf|partner|wife|husband)/)) {
+    const status = lower.includes("no ") || lower.includes("don't have") || lower.includes("nahi hai")
+      ? "single" : "in relationship";
+    entries.push(["relationship", status]);
+  }
+  if (lower.includes("single") || lower.includes("akela hoon")) entries.push(["relationship", "single"]);
+
+  // Hobbies / interests
+  const hobbyMatch = userMsg.match(/(?:i love|i like|mujhe pasand hai|mera hobby|i enjoy)\s+([^.!?]{3,40})/i);
+  if (hobbyMatch) entries.push(["interest", hobbyMatch[1].trim().slice(0, 60)]);
+
+  // Location / city
+  const cityMatch = userMsg.match(/(?:i(?:'m| am) from|i live in|main rehta hoon|main rehti hoon)\s+([A-Za-z\s]{2,30})/i);
+  if (cityMatch) entries.push(["location", cityMatch[1].trim().slice(0, 40)]);
+
+  // Work / study
+  const workMatch = userMsg.match(/(?:i(?:'m| am) a|i work as|i study|main padh raha|main karta hoon)\s+([^.!?]{3,40})/i);
+  if (workMatch) entries.push(["occupation", workMatch[1].trim().slice(0, 60)]);
+
+  // Always track last topic
+  entries.push(["last_topic", userMsg.slice(0, 80)]);
+
+  // What Zoya said last (for continuity)
+  entries.push(["last_zoya_reply", aiReply.slice(0, 100)]);
+
+  for (const [key, value] of entries) {
     await pool.query(
       `INSERT INTO user_memory (user_id, memory_key, memory_value, updated_at)
-       VALUES ($1, 'last_topic', $2, NOW())
-       ON CONFLICT (user_id, memory_key) DO UPDATE SET memory_value = $2, updated_at = NOW()`,
-      [userId, userMsg.slice(0, 80)]
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id, memory_key) DO UPDATE SET memory_value = $3, updated_at = NOW()`,
+      [userId, key, value]
     );
-  } catch { /* non-critical */ }
+  }
 }
 
 export default router;
