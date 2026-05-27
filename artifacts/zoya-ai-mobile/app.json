@@ -14,9 +14,12 @@
       "backgroundColor": "#fdf2f8"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.zoyaai.mobile"
     },
-    "android": {},
+    "android": {
+      "package": "com.zoyaai.mobile"
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
