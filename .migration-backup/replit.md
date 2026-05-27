@@ -1,6 +1,6 @@
-# [Project name]
+# Zoya AI Website
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Next.js AI website with a landing page and chat interface, cloned from the v0-zoya-ai-website GitHub repo.
 
 ## Run & Operate
 
