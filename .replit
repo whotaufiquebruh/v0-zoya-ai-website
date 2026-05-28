@@ -29,8 +29,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "(nc -z localhost 8080 2>/dev/null || PORT=8080 pnpm --filter @workspace/api-server run dev &) && PORT=8081 BASE_PATH=/ pnpm --filter @workspace/zoya-ai run dev"
-waitForPort = 8081
+args = "sleep infinity"
 
 [agent]
 stack = "PNPM_WORKSPACE"
