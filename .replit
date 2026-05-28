@@ -29,10 +29,11 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "sleep infinity"
+args = "bash start.sh"
+waitForPort = 5000
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
@@ -42,6 +43,10 @@ timeoutMs = 20000
 [[ports]]
 localPort = 3000
 externalPort = 3000
+
+[[ports]]
+localPort = 5000
+externalPort = 80
 
 [[ports]]
 localPort = 8080
@@ -54,3 +59,10 @@ externalPort = 80
 [[ports]]
 localPort = 8082
 externalPort = 3001
+
+[userenv]
+
+[userenv.shared]
+PORT = "8080"
+NODE_ENV = "development"
+BASE_PATH = ""

@@ -2,15 +2,21 @@ import { Router } from "express";
 import Groq from "groq-sdk";
 import { pool, ensureSchema } from "../lib/zoya-db";
 import { getSession } from "../lib/zoya-session";
-import { buildSystemPrompt, GROQ_MODEL, GROQ_VOICE_MODEL } from "../lib/zoya-ai";
+import { buildSystemPrompt, getCurrentMood, GROQ_MODEL, GROQ_VOICE_MODEL, type ZoyaMood } from "../lib/zoya-ai";
 
 const router = Router();
 
+// ── /api/mood — returns current mood for UI ──────────────────────────────────
+router.get("/mood", (_req, res) => {
+  res.json({ mood: getCurrentMood() });
+});
+
+// ── /api/chat ─────────────────────────────────────────────────────────────────
 router.post("/chat", async (req, res) => {
   try {
     await ensureSchema();
-    const { message, conversationId, mode } = req.body as {
-      message?: string; conversationId?: string; mode?: string;
+    const { message, conversationId, mode, mood } = req.body as {
+      message?: string; conversationId?: string; mode?: string; mood?: ZoyaMood;
     };
     if (!message?.trim()) { res.status(400).json({ error: "Message required" }); return; }
 
@@ -57,25 +63,27 @@ router.post("/chat", async (req, res) => {
 
     const groqKey = process.env["GROQ_API_KEY"];
     if (!groqKey) {
-      res.json({ reply: "AI service not configured.", conversationId: activeConversationId }); return;
+      res.json({ reply: "Yaar abhi configure nahi hua main… ek second 🥺", conversationId: activeConversationId });
+      return;
     }
 
     const groq = new Groq({ apiKey: groqKey });
     const isVoice = mode === "voice";
+    const activeMood = mood ?? getCurrentMood();
 
     const completion = await groq.chat.completions.create({
       model: isVoice ? GROQ_VOICE_MODEL : GROQ_MODEL,
       messages: [
-        { role: "system", content: buildSystemPrompt(memoryContext, isVoice) },
+        { role: "system", content: buildSystemPrompt(memoryContext, isVoice, activeMood) },
         ...history,
         { role: "user", content: message },
       ],
-      temperature: 0.82,
-      max_tokens: isVoice ? 120 : 300,
+      temperature: 0.88,
+      max_tokens: isVoice ? 120 : 280,
       top_p: 0.92,
     });
 
-    const reply = completion.choices[0]?.message?.content ?? "Hey… main hoon na 🤍";
+    const reply = completion.choices[0]?.message?.content ?? "Main hoon na 🤍";
 
     if (userId && activeConversationId) {
       await pool.query(
@@ -83,11 +91,10 @@ router.post("/chat", async (req, res) => {
         [activeConversationId, reply]
       );
       await pool.query(`UPDATE conversations SET updated_at = NOW() WHERE id = $1`, [activeConversationId]);
-      // Run memory update asynchronously — doesn't block the response
       updateMemory(userId, message, reply, activeConversationId).catch(() => {});
     }
 
-    res.json({ reply, conversationId: activeConversationId });
+    res.json({ reply, conversationId: activeConversationId, mood: activeMood });
   } catch (err) {
     req.log.error({ err }, "Chat API error");
     res.json({ reply: "Yaar network issue hai… ek second ruk 🥺", conversationId: null });
@@ -95,22 +102,18 @@ router.post("/chat", async (req, res) => {
 });
 
 // ── Smart memory extraction ───────────────────────────────────────────────────
-
 async function updateMemory(userId: string, userMsg: string, aiReply: string, _convId: string) {
   const lower = userMsg.toLowerCase();
   const entries: Array<[string, string]> = [];
 
-  // Name
   const nameMatch = userMsg.match(/(?:my name is|i(?:'m| am)|mera naam hai|main hoon)\s+([A-Za-z]{2,20})/i)
     || userMsg.match(/(?:call me|mujhe bulao)\s+([A-Za-z]{2,20})/i);
   if (nameMatch) entries.push(["name", nameMatch[1]]);
 
-  // Age
   const ageMatch = userMsg.match(/(?:i(?:'m| am)|main hoon|meri umar|i am)\s+(\d{1,2})\s*(?:years old|sal ka|years)/i)
     || userMsg.match(/(\d{1,2})\s*(?:year|sal)\s*(?:old|ka|ki)/i);
   if (ageMatch) entries.push(["age", ageMatch[1]]);
 
-  // Mood
   const moods: Record<string, string> = {
     sad: "sad", unhappy: "sad", dukhi: "sad", udaas: "sad", upset: "upset",
     happy: "happy", khush: "happy", excited: "excited", bored: "bored", bore: "bored",
@@ -121,7 +124,6 @@ async function updateMemory(userId: string, userMsg: string, aiReply: string, _c
     if (lower.includes(word)) { entries.push(["last_mood", mood]); break; }
   }
 
-  // Relationship status
   if (lower.match(/(?:my )?(?:girlfriend|boyfriend|gf|bf|partner|wife|husband)/)) {
     const status = lower.includes("no ") || lower.includes("don't have") || lower.includes("nahi hai")
       ? "single" : "in relationship";
@@ -129,22 +131,29 @@ async function updateMemory(userId: string, userMsg: string, aiReply: string, _c
   }
   if (lower.includes("single") || lower.includes("akela hoon")) entries.push(["relationship", "single"]);
 
-  // Hobbies / interests
+  // Favourite song / music
+  const songMatch = userMsg.match(/(?:favourite|favorite|fav|love|like|sunna pasand|pasand hai)\s+(?:song|music|track|band|artist)\s+(?:is\s+)?([^.!?]{2,40})/i)
+    || userMsg.match(/(?:song|music)\s+(?:sun raha|bajao|play)\s+([^.!?]{2,30})/i);
+  if (songMatch) entries.push(["fav_song", songMatch[1].trim().slice(0, 60)]);
+
   const hobbyMatch = userMsg.match(/(?:i love|i like|mujhe pasand hai|mera hobby|i enjoy)\s+([^.!?]{3,40})/i);
   if (hobbyMatch) entries.push(["interest", hobbyMatch[1].trim().slice(0, 60)]);
 
-  // Location / city
   const cityMatch = userMsg.match(/(?:i(?:'m| am) from|i live in|main rehta hoon|main rehti hoon)\s+([A-Za-z\s]{2,30})/i);
   if (cityMatch) entries.push(["location", cityMatch[1].trim().slice(0, 40)]);
 
-  // Work / study
   const workMatch = userMsg.match(/(?:i(?:'m| am) a|i work as|i study|main padh raha|main karta hoon)\s+([^.!?]{3,40})/i);
   if (workMatch) entries.push(["occupation", workMatch[1].trim().slice(0, 60)]);
 
-  // Always track last topic
-  entries.push(["last_topic", userMsg.slice(0, 80)]);
+  // Birthday
+  const bdayMatch = userMsg.match(/(?:birthday|janamdin|bday)\s+(?:is\s+)?(?:on\s+)?([A-Za-z0-9\s,]+)/i);
+  if (bdayMatch) entries.push(["birthday", bdayMatch[1].trim().slice(0, 30)]);
 
-  // What Zoya said last (for continuity)
+  // Rain / weather preference (easter egg trigger)
+  if (lower.includes("rain") || lower.includes("barish") || lower.includes("baarish"))
+    entries.push(["loves_rain", "true"]);
+
+  entries.push(["last_topic", userMsg.slice(0, 80)]);
   entries.push(["last_zoya_reply", aiReply.slice(0, 100)]);
 
   for (const [key, value] of entries) {

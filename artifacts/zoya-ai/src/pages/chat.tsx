@@ -2,12 +2,13 @@
 
 import { useState, useRef, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Menu, Phone, Send, ShieldCheck, ShieldX, Mic, Volume2, Sparkles } from "lucide-react"
+import { Menu, Phone, Send, ShieldCheck, ShieldX, Mic, Volume2 } from "lucide-react"
 import { AuthModal } from "@/components/auth-modal"
 import { RecentsSidebar } from "@/components/recents-sidebar"
 import { VoiceCallModal } from "@/components/voice-call-modal"
 import { Link } from "wouter"
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface Message {
   id: string
   role: "user" | "assistant"
@@ -30,7 +31,48 @@ interface SessionInfo {
   avatarUrl: string | null
 }
 
-function TypingIndicator() {
+type ZoyaMood = "happy" | "sleepy" | "clingy" | "teasing" | "emotional" | "calm" | "caring" | "low-energy" | "excited" | "shy"
+
+// ── Mood config ───────────────────────────────────────────────────────────────
+const MOOD_EMOJI: Record<ZoyaMood, string> = {
+  happy: "😊", sleepy: "😴", clingy: "🥺", teasing: "😏", emotional: "🥺",
+  calm: "🌸", caring: "🤍", "low-energy": "😌", excited: "✨", shy: "☺️",
+}
+
+const MOOD_STATUS: Record<ZoyaMood, string> = {
+  happy: "In a good mood",
+  sleepy: "Getting sleepy…",
+  clingy: "Missing you",
+  teasing: "In a playful mood",
+  emotional: "Feeling a lot rn",
+  calm: "Calm & peaceful",
+  caring: "Here for you",
+  "low-energy": "Little tired today",
+  excited: "Super excited!",
+  shy: "Being a little shy",
+}
+
+// ── Dynamic background by mood ────────────────────────────────────────────────
+function getMoodBackground(mood: ZoyaMood, isNight: boolean): string {
+  if (isNight) return "linear-gradient(135deg, oklch(0.12 0.02 280) 0%, oklch(0.10 0.03 320) 100%)"
+  const gradients: Record<ZoyaMood, string> = {
+    happy:        "linear-gradient(135deg, oklch(0.98 0.012 340) 0%, oklch(0.96 0.018 60) 100%)",
+    sleepy:       "linear-gradient(135deg, oklch(0.95 0.01 280) 0%, oklch(0.92 0.015 310) 100%)",
+    clingy:       "linear-gradient(135deg, oklch(0.97 0.018 340) 0%, oklch(0.95 0.022 320) 100%)",
+    teasing:      "linear-gradient(135deg, oklch(0.98 0.015 30) 0%, oklch(0.96 0.018 340) 100%)",
+    emotional:    "linear-gradient(135deg, oklch(0.96 0.012 260) 0%, oklch(0.95 0.018 310) 100%)",
+    calm:         "linear-gradient(135deg, oklch(0.97 0.012 160) 0%, oklch(0.96 0.010 200) 100%)",
+    caring:       "linear-gradient(135deg, oklch(0.98 0.012 340) 0%, oklch(0.96 0.018 310) 100%)",
+    "low-energy": "linear-gradient(135deg, oklch(0.96 0.006 280) 0%, oklch(0.95 0.008 310) 100%)",
+    excited:      "linear-gradient(135deg, oklch(0.98 0.020 30) 0%, oklch(0.96 0.024 340) 100%)",
+    shy:          "linear-gradient(135deg, oklch(0.97 0.016 350) 0%, oklch(0.96 0.014 320) 100%)",
+  }
+  return gradients[mood] ?? gradients.calm
+}
+
+// ── Typing indicator with realistic delays ────────────────────────────────────
+function TypingIndicator({ mood }: { mood: ZoyaMood }) {
+  const isNight = new Date().getHours() >= 21 || new Date().getHours() < 6
   return (
     <div className="flex items-end gap-2 max-w-xs">
       <div className="w-7 h-7 rounded-full gradient-pink flex items-center justify-center flex-shrink-0 shadow-glow-pink/30">
@@ -38,13 +80,13 @@ function TypingIndicator() {
       </div>
       <div className="msg-zoya px-4 py-3 rounded-2xl rounded-bl-md shadow-soft">
         <div className="flex items-center gap-1.5">
-          {[0, 0.18, 0.36].map((delay, i) => (
+          {[0, 0.22, 0.44].map((delay, i) => (
             <motion.span
               key={i}
               className="w-1.5 h-1.5 rounded-full"
-              style={{ background: "oklch(0.72 0.12 350 / 0.6)" }}
-              animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 0.7, repeat: Infinity, delay }}
+              style={{ background: isNight ? "oklch(0.72 0.12 350 / 0.8)" : "oklch(0.72 0.12 350 / 0.6)" }}
+              animate={{ scale: [1, 1.5, 1], opacity: [0.4, 1, 0.4] }}
+              transition={{ duration: mood === "sleepy" ? 1.2 : 0.75, repeat: Infinity, delay }}
             />
           ))}
         </div>
@@ -53,6 +95,7 @@ function TypingIndicator() {
   )
 }
 
+// ── Mic permission prompt ─────────────────────────────────────────────────────
 function MicPermissionPrompt({ isOpen, onAllow, onDeny }: { isOpen: boolean; onAllow: () => void; onDeny: () => void }) {
   if (!isOpen) return null
   return (
@@ -94,6 +137,7 @@ function MicPermissionPrompt({ isOpen, onAllow, onDeny }: { isOpen: boolean; onA
   )
 }
 
+// ── Main ChatPage ─────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
@@ -108,10 +152,15 @@ export default function ChatPage() {
   const [isCallOpen, setIsCallOpen] = useState(false)
   const [activeStream, setActiveStream] = useState<MediaStream | null>(null)
   const [permissionError, setPermissionError] = useState<string | null>(null)
+  const [mood, setMood] = useState<ZoyaMood>("calm")
+  const [typingPhase, setTypingPhase] = useState<"idle" | "thinking" | "typing">("idle")
+
   const isRequestingMic = useRef(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const convIdRef = useRef<string | null>(null)
+
+  const isNight = new Date().getHours() >= 21 || new Date().getHours() < 6
 
   useEffect(() => { convIdRef.current = activeConvId }, [activeConvId])
 
@@ -120,6 +169,13 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => { scrollToBottom() }, [messages, isLoading, scrollToBottom])
+
+  // Fetch current mood from server
+  useEffect(() => {
+    fetch("/api/mood").then(r => r.json()).then(d => {
+      if (d.mood) setMood(d.mood as ZoyaMood)
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     const checkSession = async () => {
@@ -155,10 +211,7 @@ export default function ChatPage() {
       const data = await res.json()
       setMessages(
         (data.messages || []).map((m: { id: string; role: "user" | "assistant"; content: string; created_at: string }) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          timestamp: new Date(m.created_at),
+          id: m.id, role: m.role, content: m.content, timestamp: new Date(m.created_at),
         }))
       )
     } catch { /* noop */ }
@@ -199,6 +252,13 @@ export default function ChatPage() {
     await loadConversations()
   }
 
+  // Realistic typing delay — sleepy/low-energy moods feel slower
+  const getTypingDelay = (replyLength: number): number => {
+    const base = mood === "sleepy" || mood === "low-energy" ? 1800 : mood === "excited" ? 600 : 1000
+    const perChar = mood === "sleepy" ? 28 : 18
+    return Math.min(base + replyLength * perChar, 4200)
+  }
+
   const sendMessage = async (text?: string) => {
     const content = (text ?? input).trim()
     if (!content || isLoading) return
@@ -207,21 +267,30 @@ export default function ChatPage() {
     const userMsg: Message = { id: `u_${Date.now()}`, role: "user", content, timestamp: new Date() }
     setMessages(prev => [...prev, userMsg])
     setIsLoading(true)
+    setTypingPhase("thinking")
+
+    // Brief "thinking" pause before "typing"
+    const thinkDelay = mood === "sleepy" ? 900 : mood === "excited" ? 200 : 500
+    setTimeout(() => setTypingPhase("typing"), thinkDelay)
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: content, conversationId: convIdRef.current }),
+        body: JSON.stringify({ message: content, conversationId: convIdRef.current, mood }),
       })
       const data = await res.json()
 
-      const aiMsg: Message = {
-        id: `a_${Date.now()}`,
-        role: "assistant",
-        content: data.reply || "Hey… main hoon na 🤍",
-        timestamp: new Date(),
-      }
+      // Update mood if server returned one
+      if (data.mood) setMood(data.mood as ZoyaMood)
+
+      const reply = data.reply || "Main hoon na 🤍"
+
+      // Realistic typing delay before showing reply
+      const delay = getTypingDelay(reply.length)
+      await new Promise(r => setTimeout(r, delay))
+
+      const aiMsg: Message = { id: `a_${Date.now()}`, role: "assistant", content: reply, timestamp: new Date() }
       setMessages(prev => [...prev, aiMsg])
 
       if (data.conversationId && data.conversationId !== convIdRef.current) {
@@ -238,6 +307,7 @@ export default function ChatPage() {
       ])
     } finally {
       setIsLoading(false)
+      setTypingPhase("idle")
       setTimeout(() => inputRef.current?.focus(), 100)
     }
   }
@@ -281,11 +351,7 @@ export default function ChatPage() {
     } finally { isRequestingMic.current = false }
   }
 
-  const handleDenyMic = () => {
-    setShowMicPrompt(false)
-    setPermissionError("Voice calls require microphone access.")
-  }
-
+  const handleDenyMic = () => { setShowMicPrompt(false); setPermissionError("Voice calls require microphone access.") }
   const handleCallClose = () => { setIsCallOpen(false); setActiveStream(null) }
 
   const handleVoiceTranscript = useCallback((text: string, isUser: boolean) => {
@@ -297,16 +363,15 @@ export default function ChatPage() {
     }
   }, [])
 
-  const suggestedMessages = [
-    "Hey Zoya! Kaise ho? 😊",
-    "I'm feeling lonely today...",
-    "Tell me something fun!",
-    "Aaj ka din kaisa tha tumhara?",
-  ]
+  const suggestedMessages = isNight
+    ? ["Neend nahi aa rahi 😭", "Kuch baat karte hai", "Aaj ka din kaisa tha?", "Lonely feel ho raha hai..."]
+    : ["Hey Zoya! Kaise ho? 😊", "I'm feeling lonely today...", "Tell me something fun!", "Kuch bolo na 🌸"]
+
+  const bg = getMoodBackground(mood, isNight)
 
   if (sessionLoading) {
     return (
-      <div className="min-h-screen gradient-bg flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" style={{ background: bg }}>
         <motion.div animate={{ scale: [1, 1.05, 1] }} transition={{ duration: 1.5, repeat: Infinity }}
           className="w-16 h-16 rounded-full gradient-pink flex items-center justify-center shadow-glow-pink">
           <span className="font-serif text-3xl font-bold text-white">Z</span>
@@ -316,7 +381,12 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="min-h-screen gradient-bg flex" style={{ height: "100dvh" }}>
+    <motion.div
+      className="min-h-screen flex"
+      style={{ height: "100dvh", background: bg, transition: "background 1.5s ease" }}
+      animate={{ background: bg }}
+      transition={{ duration: 1.5 }}
+    >
       <AuthModal isOpen={showAuth} onContinueAsGuest={handleAuthComplete} />
 
       <AnimatePresence>
@@ -349,13 +419,21 @@ export default function ChatPage() {
       />
 
       <div className="flex-1 flex flex-col min-w-0 relative">
-        <div className="flex items-center justify-between px-4 py-3 glass border-b border-border/50">
+        {/* Header */}
+        <div
+          className="flex items-center justify-between px-4 py-3 border-b"
+          style={{
+            background: isNight ? "rgba(20,10,30,0.7)" : "rgba(255,255,255,0.75)",
+            backdropFilter: "blur(20px)",
+            borderColor: isNight ? "rgba(255,255,255,0.08)" : "oklch(0.93 0.006 320)",
+          }}
+        >
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSidebarOpen(true)}
               className="lg:hidden w-9 h-9 rounded-full flex items-center justify-center hover:bg-secondary transition-colors"
             >
-              <Menu className="w-5 h-5 text-foreground/70" />
+              <Menu className="w-5 h-5" style={{ color: isNight ? "rgba(255,255,255,0.7)" : undefined }} />
             </button>
             <div className="flex items-center gap-2.5">
               <div className="relative">
@@ -365,8 +443,13 @@ export default function ChatPage() {
                 <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 rounded-full border-2 border-white" />
               </div>
               <div>
-                <p className="font-semibold text-sm text-foreground leading-none">Zoya</p>
-                <p className="text-[11px] text-emerald-500 mt-0.5">Online</p>
+                <p className="font-semibold text-sm leading-none" style={{ color: isNight ? "rgba(255,255,255,0.9)" : "oklch(0.145 0 0)" }}>
+                  Zoya
+                  <span className="ml-1.5 text-xs font-normal opacity-70">{MOOD_EMOJI[mood]}</span>
+                </p>
+                <p className="text-[11px] mt-0.5" style={{ color: isLoading ? "oklch(0.60 0.18 340)" : "oklch(0.55 0.15 160)" }}>
+                  {isLoading ? (typingPhase === "thinking" ? "thinking…" : "typing…") : MOOD_STATUS[mood]}
+                </p>
               </div>
             </div>
           </div>
@@ -379,40 +462,46 @@ export default function ChatPage() {
               <Phone className="w-3.5 h-3.5" /> Voice Call
             </motion.button>
             <Link href="/"
-              className="px-3 py-2 rounded-full text-xs text-muted-foreground hover:bg-secondary transition-colors">
+              className="px-3 py-2 rounded-full text-xs transition-colors"
+              style={{ color: isNight ? "rgba(255,255,255,0.5)" : "oklch(0.55 0.02 320)" }}>
               Home
             </Link>
           </div>
         </div>
 
+        {/* Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
           {messages.length === 0 && !isLoading && (
             <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
               className="flex flex-col items-center justify-center min-h-[50vh] text-center"
             >
               <motion.div
                 animate={{ scale: [1, 1.04, 1] }}
-                transition={{ duration: 3, repeat: Infinity }}
+                transition={{ duration: mood === "sleepy" ? 4 : 3, repeat: Infinity }}
                 className="w-20 h-20 rounded-full gradient-pink flex items-center justify-center shadow-glow-pink mb-5"
               >
                 <span className="font-serif text-4xl font-bold text-white">Z</span>
               </motion.div>
-              <h2 className="font-serif text-2xl font-semibold text-foreground mb-2">
-                Hey{session?.name && !session.isGuest ? `, ${session.name}` : ""}! 💕
+              <h2 className="font-serif text-2xl font-semibold mb-2" style={{ color: isNight ? "rgba(255,255,255,0.9)" : "oklch(0.145 0 0)" }}>
+                {isNight ? "Heyy… jaag rahe ho? 🌙" : `Hey${session?.name && !session.isGuest ? `, ${session.name}` : ""}! 💕`}
               </h2>
-              <p className="text-muted-foreground text-sm max-w-[260px] leading-relaxed mb-8">
-                Main Zoya hoon… tumse baat karne ka wait kar rahi thi 🌸
+              <p className="text-sm max-w-[260px] leading-relaxed mb-8" style={{ color: isNight ? "rgba(255,255,255,0.45)" : "oklch(0.55 0.02 320)" }}>
+                {isNight
+                  ? "Raat ko online ho tum… sab theek hai na? 🥺"
+                  : "Main Zoya hoon… tumse baat karne ka wait kar rahi thi 🌸"}
               </p>
               <div className="flex flex-wrap gap-2 justify-center max-w-sm">
                 {suggestedMessages.map((msg) => (
                   <motion.button
-                    key={msg}
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.97 }}
+                    key={msg} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
                     onClick={() => sendMessage(msg)}
-                    className="px-4 py-2 rounded-full glass-soft text-sm text-foreground/70 hover:border-primary/30 hover:text-foreground transition-all shadow-soft"
+                    className="px-4 py-2 rounded-full text-sm transition-all shadow-soft"
+                    style={{
+                      background: isNight ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.7)",
+                      border: isNight ? "1px solid rgba(255,255,255,0.12)" : "1px solid oklch(0.90 0.006 320)",
+                      color: isNight ? "rgba(255,255,255,0.7)" : "oklch(0.40 0.02 320)",
+                    }}
                   >
                     {msg}
                   </motion.button>
@@ -436,10 +525,14 @@ export default function ChatPage() {
                   </div>
                 )}
                 <div className={`max-w-[75%] sm:max-w-[65%] px-4 py-3 rounded-2xl shadow-soft text-sm leading-relaxed ${
-                  msg.role === "user"
-                    ? "msg-user rounded-br-md"
-                    : "msg-zoya rounded-bl-md text-foreground"
-                }`}>
+                  msg.role === "user" ? "msg-user rounded-br-md" : "rounded-bl-md"
+                }`}
+                  style={msg.role === "assistant" ? {
+                    background: isNight ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.82)",
+                    border: isNight ? "1px solid rgba(255,255,255,0.12)" : "1px solid oklch(0.92 0.006 320)",
+                    color: isNight ? "rgba(255,255,255,0.88)" : "oklch(0.20 0.01 320)",
+                  } : {}}
+                >
                   <p style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{msg.content}</p>
                 </div>
                 {msg.role === "user" && (
@@ -455,13 +548,14 @@ export default function ChatPage() {
 
           {isLoading && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-              <TypingIndicator />
+              <TypingIndicator mood={mood} />
             </motion.div>
           )}
 
           <div ref={messagesEndRef} />
         </div>
 
+        {/* Permission error */}
         <AnimatePresence>
           {permissionError && (
             <motion.div
@@ -473,7 +567,15 @@ export default function ChatPage() {
           )}
         </AnimatePresence>
 
-        <div className="px-4 py-4 glass border-t border-border/50">
+        {/* Input area */}
+        <div
+          className="px-4 py-4 border-t"
+          style={{
+            background: isNight ? "rgba(20,10,30,0.7)" : "rgba(255,255,255,0.75)",
+            backdropFilter: "blur(20px)",
+            borderColor: isNight ? "rgba(255,255,255,0.08)" : "oklch(0.93 0.006 320)",
+          }}
+        >
           <div className="flex items-end gap-3 max-w-3xl mx-auto">
             <div className="flex-1 relative">
               <textarea
@@ -481,10 +583,16 @@ export default function ChatPage() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Kuch bolo Zoya se…"
+                placeholder={isNight ? "Kuch bolo… main hoon na 🌙" : "Kuch bolo Zoya se…"}
                 rows={1}
-                className="w-full resize-none bg-white border border-border rounded-2xl px-4 py-3.5 pr-4 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/10 transition-all shadow-soft"
-                style={{ maxHeight: 120, overflowY: "auto" }}
+                className="w-full resize-none rounded-2xl px-4 py-3.5 pr-4 text-sm placeholder:text-muted-foreground/60 focus:outline-none transition-all shadow-soft"
+                style={{
+                  maxHeight: 120,
+                  overflowY: "auto",
+                  background: isNight ? "rgba(255,255,255,0.08)" : "white",
+                  border: isNight ? "1px solid rgba(255,255,255,0.15)" : "1px solid oklch(0.90 0.006 320)",
+                  color: isNight ? "rgba(255,255,255,0.88)" : "oklch(0.145 0 0)",
+                }}
                 onInput={e => {
                   const el = e.currentTarget
                   el.style.height = "auto"
@@ -493,8 +601,7 @@ export default function ChatPage() {
               />
             </div>
             <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
+              whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
               onClick={() => sendMessage()}
               disabled={!input.trim() || isLoading}
               className="w-12 h-12 rounded-2xl gradient-pink flex items-center justify-center shadow-glow-pink/40 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity flex-shrink-0"
@@ -507,16 +614,15 @@ export default function ChatPage() {
             </motion.button>
           </div>
           <div className="flex items-center justify-between mt-2 max-w-3xl mx-auto px-1">
-            <p className="text-[10px] text-muted-foreground/40">
-              Press Enter to send, Shift+Enter for new line
+            <p className="text-[10px] opacity-40" style={{ color: isNight ? "white" : "inherit" }}>
+              Press Enter to send · Shift+Enter for new line
             </p>
-            <div className="flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-primary/40" />
-              <p className="text-[10px] text-muted-foreground/40">Powered by Groq</p>
-            </div>
+            <p className="text-[10px] opacity-40" style={{ color: isNight ? "white" : "inherit" }}>
+              {MOOD_EMOJI[mood]} {mood} mode
+            </p>
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   )
 }
