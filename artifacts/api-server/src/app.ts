@@ -43,7 +43,7 @@ if (process.env.NODE_ENV === "production") {
 
   app.use(express.static(staticDir, { maxAge: "1d", etag: true }));
 
-  app.get("*", (_req, res) => {
+  app.get("/{*splat}", (_req, res) => {
     if (fsMod.existsSync(indexHtml)) {
       res.sendFile(indexHtml);
     } else {
