@@ -64,5 +64,10 @@ externalPort = 3001
 
 [userenv.shared]
 PORT = "8080"
-NODE_ENV = "development"
 BASE_PATH = ""
+
+[userenv.development]
+NODE_ENV = "development"
+
+[userenv.production]
+NODE_ENV = "production"
