@@ -1,7 +1,11 @@
 import { motion } from "framer-motion"
 import { Link } from "wouter"
 
-export function Header() {
+interface HeaderProps {
+  onChatClick?: () => void
+}
+
+export function Header({ onChatClick }: HeaderProps) {
   return (
     <motion.header
       className="fixed top-0 left-0 right-0 z-50"
@@ -25,15 +29,14 @@ export function Header() {
             <a href="#about" className="text-sm text-muted-foreground hover:text-foreground transition-colors duration-200">About</a>
           </div>
 
-          <Link href="/chat">
-            <motion.button
-              className="px-5 py-2.5 rounded-full gradient-pink text-white text-sm font-semibold shadow-glow-pink/40 hover:shadow-glow-pink transition-all duration-200"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              Chat with Zoya
-            </motion.button>
-          </Link>
+          <motion.button
+            className="px-5 py-2.5 rounded-full gradient-pink text-white text-sm font-semibold shadow-glow-pink/40 hover:shadow-glow-pink transition-all duration-200"
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={onChatClick}
+          >
+            Chat with Zoya
+          </motion.button>
         </nav>
       </div>
     </motion.header>

@@ -1,8 +1,11 @@
 import { motion } from "framer-motion"
 import { ArrowRight } from "lucide-react"
-import { Link } from "wouter"
 
-export function CTASection() {
+interface CTASectionProps {
+  onStartTalking?: () => void
+}
+
+export function CTASection({ onStartTalking }: CTASectionProps) {
   return (
     <section className="py-20 md:py-32">
       <div className="mx-auto max-w-7xl px-6">
@@ -36,16 +39,15 @@ export function CTASection() {
               </p>
 
               <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <Link href="/chat">
-                  <motion.button
-                    className="group flex items-center gap-2 px-8 py-4 rounded-full bg-background text-foreground font-medium text-base hover:bg-background/90 transition-all duration-300"
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    Start Talking
-                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
-                  </motion.button>
-                </Link>
+                <motion.button
+                  className="group flex items-center gap-2 px-8 py-4 rounded-full bg-background text-foreground font-medium text-base hover:bg-background/90 transition-all duration-300"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={onStartTalking}
+                >
+                  Start Talking
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
+                </motion.button>
 
                 <a href="#features">
                   <motion.button

@@ -1,8 +1,11 @@
 import { motion } from "framer-motion"
 import { ArrowRight, MessageCircle } from "lucide-react"
-import { Link } from "wouter"
 
-export function HeroSection() {
+interface HeroSectionProps {
+  onStartTalking?: () => void
+}
+
+export function HeroSection({ onStartTalking }: HeroSectionProps) {
   return (
     <section className="relative min-h-screen flex items-center justify-center pt-20">
       <div className="mx-auto max-w-7xl px-6 py-20 md:py-32">
@@ -46,17 +49,16 @@ export function HeroSection() {
             transition={{ duration: 0.8, delay: 0.3 }}
             className="flex flex-col sm:flex-row items-center gap-4"
           >
-            <Link href="/chat">
-              <motion.button
-                className="group flex items-center gap-2 px-8 py-4 rounded-full bg-foreground text-background font-medium text-base hover:bg-foreground/90 transition-all duration-300"
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-              >
-                <MessageCircle className="w-5 h-5" />
-                Start Talking
-                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
-              </motion.button>
-            </Link>
+            <motion.button
+              className="group flex items-center gap-2 px-8 py-4 rounded-full bg-foreground text-background font-medium text-base hover:bg-foreground/90 transition-all duration-300"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={onStartTalking}
+            >
+              <MessageCircle className="w-5 h-5" />
+              Start Talking
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
+            </motion.button>
 
             <a href="#demo">
               <motion.button

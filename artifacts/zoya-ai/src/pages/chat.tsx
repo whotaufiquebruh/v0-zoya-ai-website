@@ -137,6 +137,113 @@ function MicPermissionPrompt({ isOpen, onAllow, onDeny }: { isOpen: boolean; onA
   )
 }
 
+// ── Guest Upgrade Nudge ───────────────────────────────────────────────────────
+function GuestUpgradeNudge({ onUpgrade }: { onUpgrade: () => void }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      className="mx-4 mt-3 flex items-center justify-between gap-3 px-4 py-2.5 rounded-2xl"
+      style={{ background: "linear-gradient(135deg, oklch(0.97 0.018 340), oklch(0.96 0.018 310))", border: "1px solid oklch(0.90 0.012 330)" }}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-base flex-shrink-0">💾</span>
+        <p className="text-xs text-foreground/70 leading-snug">
+          <span className="font-medium text-foreground">Save your chats</span> — create a free account to keep conversations forever
+        </p>
+      </div>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        <motion.button
+          whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.97 }}
+          onClick={onUpgrade}
+          className="px-3 py-1.5 rounded-xl gradient-pink text-white text-xs font-semibold shadow-glow-pink/30"
+        >
+          Save
+        </motion.button>
+        <button
+          onClick={() => setDismissed(true)}
+          className="w-6 h-6 rounded-full flex items-center justify-center text-muted-foreground hover:bg-secondary transition-colors text-xs"
+        >✕</button>
+      </div>
+    </motion.div>
+  )
+}
+
+// ── Upgrade Modal (inline in chat for guests) ─────────────────────────────────
+function UpgradeModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose: () => void; onSuccess: (name: string) => void }) {
+  const [name, setName] = useState("")
+  const [email, setEmail] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) { setError("Naam toh batao 🥺"); return }
+    setLoading(true); setError("")
+    try {
+      const res = await fetch("/api/auth/upgrade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), email: email.trim() || undefined }),
+      })
+      const data = await res.json()
+      if (data.success) { onSuccess(data.name); onClose() }
+      else setError(data.error || "Something went wrong")
+    } catch { setError("Network error, try again") }
+    finally { setLoading(false) }
+  }
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center px-4 pb-4 sm:pb-0"
+          style={{ background: "rgba(10,5,15,0.50)", backdropFilter: "blur(16px)" }}
+          onClick={e => { if (e.target === e.currentTarget) onClose() }}
+        >
+          <motion.div
+            initial={{ y: 50, opacity: 0, scale: 0.95 }} animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 30, opacity: 0 }}
+            transition={{ type: "spring", damping: 26, stiffness: 320 }}
+            className="w-full max-w-sm bg-white rounded-3xl overflow-hidden shadow-2xl"
+            style={{ border: "1px solid oklch(0.93 0.006 320)" }}
+          >
+            <div className="h-1.5 gradient-pink" />
+            <div className="px-7 py-7">
+              <div className="text-center mb-5">
+                <div className="w-12 h-12 rounded-full gradient-pink flex items-center justify-center shadow-glow-pink mx-auto mb-3">
+                  <span className="font-serif text-xl font-bold text-white">Z</span>
+                </div>
+                <h3 className="font-serif text-lg font-semibold text-foreground">Apna naam batao 🌸</h3>
+                <p className="text-muted-foreground text-sm mt-1">Zoya tumhe personally yaad rakhegi</p>
+              </div>
+              <form onSubmit={handleSubmit} className="space-y-3">
+                <input type="text" placeholder="Your name *" value={name} onChange={e => { setName(e.target.value); setError("") }}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-secondary/40 text-sm focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 transition-all"
+                  autoFocus maxLength={30} />
+                <input type="email" placeholder="Email (optional)" value={email} onChange={e => setEmail(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-border bg-secondary/40 text-sm focus:outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/10 transition-all" />
+                {error && <p className="text-xs text-red-500 px-1">{error}</p>}
+                <motion.button type="submit" whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} disabled={loading}
+                  className="w-full py-3.5 rounded-2xl gradient-pink text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-glow-pink disabled:opacity-60">
+                  {loading ? <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> : "Save my chats 💕"}
+                </motion.button>
+                <button type="button" onClick={onClose} className="w-full text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors py-1">
+                  Maybe later
+                </button>
+              </form>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+}
+
 // ── Main ChatPage ─────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -145,6 +252,7 @@ export default function ChatPage() {
   const [session, setSession] = useState<SessionInfo | null>(null)
   const [sessionLoading, setSessionLoading] = useState(true)
   const [showAuth, setShowAuth] = useState(false)
+  const [showUpgrade, setShowUpgrade] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
@@ -388,6 +496,11 @@ export default function ChatPage() {
       transition={{ duration: 1.5 }}
     >
       <AuthModal isOpen={showAuth} onContinueAsGuest={handleAuthComplete} />
+      <UpgradeModal
+        isOpen={showUpgrade}
+        onClose={() => setShowUpgrade(false)}
+        onSuccess={(name) => setSession(s => s ? { ...s, name, isGuest: false } : s)}
+      />
 
       <AnimatePresence>
         {showMicPrompt && (
@@ -468,6 +581,11 @@ export default function ChatPage() {
             </Link>
           </div>
         </div>
+
+        {/* Guest upgrade nudge */}
+        {session?.isGuest && (
+          <GuestUpgradeNudge onUpgrade={() => setShowUpgrade(true)} />
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">

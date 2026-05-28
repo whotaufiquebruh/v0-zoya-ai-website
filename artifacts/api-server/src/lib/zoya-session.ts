@@ -31,10 +31,7 @@ export async function getSession(req: Request): Promise<Session | null> {
 
     if (result.rows.length === 0) return null;
 
-    await pool.query(
-      `UPDATE users SET last_seen_at = NOW() WHERE id = $1`,
-      [result.rows[0].user_id]
-    );
+    await pool.query(`UPDATE users SET last_seen_at = NOW() WHERE id = $1`, [result.rows[0].user_id]);
 
     return {
       userId: result.rows[0].user_id,
@@ -53,17 +50,27 @@ export async function createGuestSession(): Promise<string> {
   const userId = `guest_${randomUUID()}`;
   const sessionId = randomUUID();
 
+  await pool.query(`INSERT INTO users (id, name, is_guest) VALUES ($1, 'Guest', true)`, [userId]);
   await pool.query(
-    `INSERT INTO users (id, name, is_guest) VALUES ($1, 'Guest', true)`,
-    [userId]
-  );
-
-  await pool.query(
-    `INSERT INTO user_sessions (id, user_id, expires_at)
-     VALUES ($1, $2, NOW() + INTERVAL '${SESSION_DURATION_DAYS} days')`,
+    `INSERT INTO user_sessions (id, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '${SESSION_DURATION_DAYS} days')`,
     [sessionId, userId]
   );
+  return sessionId;
+}
 
+export async function createNamedSession(name: string, email: string | null): Promise<string> {
+  await ensureSchema();
+  const userId = `user_${randomUUID()}`;
+  const sessionId = randomUUID();
+
+  await pool.query(
+    `INSERT INTO users (id, name, email, is_guest) VALUES ($1, $2, $3, false)`,
+    [userId, name, email]
+  );
+  await pool.query(
+    `INSERT INTO user_sessions (id, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '${SESSION_DURATION_DAYS} days')`,
+    [sessionId, userId]
+  );
   return sessionId;
 }
 
